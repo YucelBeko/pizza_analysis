@@ -368,7 +368,7 @@ def run_pizza():
             L = centers_lab[:, 0].astype(np.float32)
             A = centers_lab[:, 1].astype(np.float32)
             B = centers_lab[:, 2].astype(np.float32)
-            return 0.6*(255.0 - L) + 0.4*np.maximum(A, 0) + 0.15*np.maximum(B, 0)  # büyük = daha kahverengi
+            return 0.6*(255.0 - L) + 0.35*np.maximum(A, 0) + 0.15*np.maximum(B, 0)  # büyük = daha kahverengi
 
         def _stack_masked_lab(img_bgr, mask_u8, max_pix=30000, seed=42):
             lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.int16)
@@ -1219,6 +1219,7 @@ else:
 
 
  
+
 
 
 
