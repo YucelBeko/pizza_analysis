@@ -278,7 +278,7 @@ def run_pizza():
         LAB_A_MIN, LAB_A_MAX =  2,  90
         LAB_B_MIN, LAB_B_MAX =  6, 130
 
-        DOUGH_L_MIN, DOUGH_L_MAX = 100, 250
+        DOUGH_L_MIN, DOUGH_L_MAX = 95, 250
         DOUGH_A_MIN, DOUGH_A_MAX = -5,  15
         DOUGH_B_MIN, DOUGH_B_MAX =  0,  60
         # --- Yanık sınıfını sıkılaştırma (yalnızca siyahımsı pikseller 'burnt')
@@ -1219,6 +1219,7 @@ else:
 
 
  
+
 
 
 
