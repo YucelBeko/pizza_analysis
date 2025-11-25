@@ -454,6 +454,20 @@ def run_pizza():
 
             # 2) ama siyahımsı değilse ve 'burnt' etiketliyse → DARK_BROWN'a DÜŞÜR
             wrong_burnt = (class_idx == burnt_i) & (~blackish) & m
+            dough_i = class_order.index("Dough")
+            light_i = class_order.index("Light Brown")
+        
+            # Dough seçilmiş ama içinde biraz "sarılık/kırmızılık" (A veya B) olanları terfi ettir
+            # Bu sayıları düşürürseniz "Light Brown" alanı genişler (Pembe azalır).
+            UPGRADE_A_MIN = 5   # Kırmızılık eşiği (Düşürürseniz pembe alan azalır)
+            UPGRADE_B_MIN = 10  # Sarılık eşiği    (Düşürürseniz pembe alan azalır)
+        
+            is_dough = (class_idx == dough_i)
+            # Hamur ise VE (kırmızılık > 5 VEYA sarılık > 10) ise -> Light Brown yap
+            should_be_cooked = is_dough & ((A0 > UPGRADE_A_MIN) | (B0 > UPGRADE_B_MIN))
+            class_idx[should_be_cooked] = light_i
+
+            counts = {c: int(np.count_nonzero(class_idx == i)) for i,c in enumerate(class_order)}
             class_idx[wrong_burnt] = dark_i
 
             # --- istatistik
@@ -1219,6 +1233,7 @@ else:
 
 
  
+
 
 
 
