@@ -975,9 +975,17 @@ def run_borek():
                 fig, ax = plt.subplots(figsize=(2,2), dpi=110)
                 labels = ["Undercooked", "Cooked", "Overcooked"]
                 colors = ["#FFFF66", "#FF9900", "#C10100"]  # görsellik için basit renkler
-                ax.pie(counts, labels=labels, colors=colors, startangle=90,
-                    counterclock=False, wedgeprops=dict(edgecolor="white", linewidth=1),
-                    autopct=lambda p: f"{p:.1f}%" if p > 0 else "")
+                ax.pie(counts, 
+                       labels=labels, 
+                       colors=colors, 
+                       startangle=90,
+                        counterclock=False, 
+                       wedgeprops=dict(edgecolor="white", linewidth=1),
+                    autopct=lambda p: f"{p:.1f}%" if p > 0 else "",
+                    pctdistance=0.78,
+                    labeldistance=1.08,
+                    wedgeprops=dict(linewidth=0.8, edgecolor="white")
+                      )
                 ax.axis("equal")
                 st.pyplot(fig, clear_figure=True)
                 plt.close(fig)
@@ -1233,6 +1241,7 @@ else:
 
 
  
+
 
 
 
