@@ -215,7 +215,7 @@ def run_potato():
                 total = max(sum(counts), 1)
                 perc = [100.0 * c / total for c in counts]
 
-                labels = ["Çiğ", "Pişmiş", "Yanık"]
+                labels = ["Undercooked", "Cooked", "Overcooked"]
                 colors = [CLASS_COLORS["dough"], CLASS_COLORS["cooked"], CLASS_COLORS["burnt"]]
 
                 fig, ax = plt.subplots(figsize=(2, 2), dpi=110)
@@ -227,9 +227,9 @@ def run_potato():
                 plt.close(fig)
 
                 st.markdown(
-                    f"**Çiğ:** {perc[0]:.1f}% &nbsp;&nbsp;|&nbsp;&nbsp; "
-                    f"**Pişmiş:** {perc[1]:.1f}% &nbsp;&nbsp;|&nbsp;&nbsp; "
-                    f"**Yanık:** {perc[2]:.1f}%"
+                    f"**Undercooked:** {perc[0]:.1f}% &nbsp;&nbsp;|&nbsp;&nbsp; "
+                    f"**Cooked:** {perc[1]:.1f}% &nbsp;&nbsp;|&nbsp;&nbsp; "
+                    f"**Overcooked:** {perc[2]:.1f}%"
                 )
 
                 st.divider()
@@ -833,9 +833,9 @@ def run_pizza():
 
                 st.markdown(
                     f"<div style='text-align:center; margin-top:-10px; margin-bottom:15px'>"
-                    f" <b>Çiğ:</b> {dough:.1f}%   |   "
-                    f" <b>Pişmiş:</b> {pis:.1f}%   |   "
-                    f" <b>Yanık:</b> {burnt:.1f}%"
+                    f" <b>Undercooked:</b> {dough:.1f}%   |   "
+                    f" <b>Cooked:</b> {pis:.1f}%   |   "
+                    f" <b>Overcooked:</b> {burnt:.1f}%"
                     f"</div>",
                     unsafe_allow_html=True
                 )
@@ -973,7 +973,7 @@ def run_borek():
 
                 # --- Pie chart ---
                 fig, ax = plt.subplots(figsize=(2,2), dpi=110)
-                labels = ["Çiğ", "Pişmiş", "Yanık"]
+                labels = ["Undercooked", "Cooked", "Overcooked"]
                 colors = ["#FFFF66", "#FF9900", "#C10100"]  # görsellik için basit renkler
                 ax.pie(counts, labels=labels, colors=colors, startangle=90,
                     counterclock=False, wedgeprops=dict(edgecolor="white", linewidth=1),
@@ -983,9 +983,9 @@ def run_borek():
                 plt.close(fig)
 
                 st.markdown(
-                    f"**Çiğ:** {perc[0]:.1f}% &nbsp;&nbsp;|&nbsp;&nbsp; "
-                    f"**Pişmiş:** {perc[1]:.1f}% &nbsp;&nbsp;|&nbsp;&nbsp; "
-                    f"**Yanık:** {perc[2]:.1f}%"
+                    f"**Undercooked:** {perc[0]:.1f}% &nbsp;&nbsp;|&nbsp;&nbsp; "
+                    f"**Cooked:** {perc[1]:.1f}% &nbsp;&nbsp;|&nbsp;&nbsp; "
+                    f"**Overcooked:** {perc[2]:.1f}%"
                 )
                 st.divider()
         else:
@@ -1233,6 +1233,7 @@ else:
 
 
  
+
 
 
 
