@@ -980,7 +980,6 @@ def run_borek():
                        colors=colors, 
                        startangle=90,
                         counterclock=False, 
-                       wedgeprops=dict(edgecolor="white", linewidth=1),
                     autopct=lambda p: f"{p:.1f}%" if p > 0 else "",
                     pctdistance=0.78,
                     labeldistance=1.08,
@@ -1241,6 +1240,7 @@ else:
 
 
  
+
 
 
 
