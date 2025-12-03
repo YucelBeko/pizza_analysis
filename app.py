@@ -854,149 +854,144 @@ def run_pizza():
                     st.caption(f"Homojenlik skoru: **{uni:.1f}/100**")
  
 def run_borek():
-        st.markdown(
-            """
-            <style>
-            .block-container h1 {
-                margin-top: -80px;   /* başlığın üst boşluğunu azaltır */
-            }
-            </style>
-            """,
-            unsafe_allow_html=True
-        )
+    st.markdown(
+        """
+        <style>
+        .block-container h1 { margin-top: -80px; }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
     # ============ Yardımcılar ============
-        def hex_to_bgr(hex_code):
-            h = hex_code.lstrip("#")
-            r = int(h[0:2], 16)
-            g = int(h[2:4], 16)
-            b = int(h[4:6], 16)
-            return (b, g, r)
+    def hex_to_bgr(hex_code):
+        h = hex_code.lstrip("#")
+        return (int(h[4:6], 16), int(h[2:4], 16), int(h[0:2], 16))
 
-        # Verilen renk haritası
-        COLOR_MAP = {
-            "#FFFEB5": "#818100",
-            "#FEFF94": "#666732",
-            "#FEFE7A": "#01FEFF",
-            "#FFD15C": "#32CDFF",
-            "#EDB256": "#FF99FF",
-            "#E4A741": "#FF00FF",
-            "#C38F49": "#FFFE67",
-            "#B89057": "#CDCC01",
-            "#996F3C": "#0167CC",
-            "#916533": "#0101CC",
-            "#845A37": "#01FF01",
-            "#6C5033": "#01CC01",
-            "#68533E": "#FE0001",
-            "#404032": "#C10100"
-        }
-        SRC_BGR = np.array([hex_to_bgr(h) for h in COLOR_MAP.keys()], dtype=np.uint8)
-        DST_BGR = np.array([hex_to_bgr(h) for h in COLOR_MAP.values()], dtype=np.uint8)
-        SRC_LAB = cv2.cvtColor(SRC_BGR[np.newaxis,:,:], cv2.COLOR_BGR2LAB)[0]
+    COLOR_MAP = {
+        "#FFFEB5": "#818100", "#FEFF94": "#666732", "#FEFE7A": "#01FEFF", "#FFD15C": "#32CDFF",
+        "#EDB256": "#FF99FF", "#E4A741": "#FF00FF", "#C38F49": "#FFFE67", "#B89057": "#CDCC01",
+        "#996F3C": "#0167CC", "#916533": "#0101CC", "#845A37": "#01FF01", "#6C5033": "#01CC01",
+        "#68533E": "#FE0001", "#404032": "#C10100"
+    }
+    SRC_BGR = np.array([hex_to_bgr(h) for h in COLOR_MAP.keys()], dtype=np.uint8)
+    DST_BGR = np.array([hex_to_bgr(h) for h in COLOR_MAP.values()], dtype=np.uint8)
+    SRC_LAB = cv2.cvtColor(SRC_BGR[np.newaxis,:,:], cv2.COLOR_BGR2LAB)[0]
+
+    def simple_mask_white_bg(bgr, V_thresh=230, min_area=20000):
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        m = (hsv[...,2] < V_thresh).astype(np.uint8) * 255
+        cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cnts = [c for c in cnts if cv2.contourArea(c) >= min_area]
+        mask = np.zeros_like(m)
+        if cnts: cv2.drawContours(mask, [max(cnts, key=cv2.contourArea)], -1, 255, -1)
+        return mask
+
+    def recolor_by_lab(img_bgr, mask):
+        H, W = img_bgr.shape[:2]
+        lab_img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).reshape(-1,3).astype(np.int16)
+        src16 = SRC_LAB.astype(np.int16)
+        recolored = np.full((lab_img.shape[0], 3), 255, dtype=np.uint8)
+        idx = np.where(mask.reshape(-1) > 0)[0]
+        for i in idx:
+            dist = np.linalg.norm(src16 - lab_img[i], axis=1)
+            recolored[i] = DST_BGR[np.argmin(dist)]
+        return recolored.reshape(H, W, 3)
+
+    # --- Renk Tanımları ---
+    RAW_BGR    = np.array([hex_to_bgr(c) for c in ["#818100", "#666732", "#01FEFF", "#32CDFF"]], dtype=np.uint8)
+    COOKED_BGR = np.array([hex_to_bgr(c) for c in ["#FF99FF", "#FF00FF", "#FFFE67", "#CDCC01", "#01FF01", "#01CC01","#0167CC", "#0101CC"]], dtype=np.uint8)
+    BURNT_BGR  = np.array([hex_to_bgr(c) for c in ["#FE0001", "#C10100"]], dtype=np.uint8)
+
+    # --- UI Başlangıcı ---
+    st.set_page_config(page_title="Pişme Analizi", layout="wide")
+    st.title("Börek Analizi")
+
+    uploads = st.file_uploader("Görsel Yükle", type=["jpg","png","jpeg"], accept_multiple_files=True)
+    if uploads:
+        for up in uploads:
+            file_bytes = np.frombuffer(up.read(), np.uint8)
+            bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+            mask = simple_mask_white_bg(bgr)
+            heat_bgr = recolor_by_lab(bgr, mask)
+
+            c1, c2 = st.columns(2, gap="small")
+            with c1: st.subheader("Orijinal"); st.image(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), use_container_width=True)
+            with c2: st.subheader("Analiz"); st.image(cv2.cvtColor(heat_bgr, cv2.COLOR_BGR2RGB), use_container_width=True)
+
+            # Sayım
+            flat = heat_bgr[mask > 0]
+            def cnt(tgt):
+                tot = 0
+                for c in tgt: tot += np.count_nonzero(np.all(flat == c, axis=1))
+                return tot
+            
+            counts = [cnt(RAW_BGR), cnt(COOKED_BGR), cnt(BURNT_BGR)]
+            total = max(sum(counts), 1)
+            perc = [100.0 * c / total for c in counts]
+            
+            labels = ["Undercooked", "Cooked", "Overcooked"]
+            colors = ["#FFFF66", "#FF9900", "#C10100"] 
+
+            # ==========================================
+            #   EXCEL TARZI OKLU & DIŞARI TAŞAN GRAFİK
+            # ==========================================
+            # 1. FIGSIZE: (4, 2.5) yaparak fiziksel boyutu küçültüyoruz.
+            # DPI: 100 standarttır, artırırsanız yazılar yine devleşebilir.
+            fig, ax = plt.subplots(figsize=(4, 2.5), dpi=100)
+
+            wedges, texts = ax.pie(
+                counts, 
+                colors=colors, 
+                startangle=90, 
+                counterclock=False,
+                wedgeprops=dict(width=0.4, edgecolor="white", linewidth=1) # Donut halkasını incelttim (0.4)
+            )
+
+            # 2. KUTU VE YAZI AYARLARI
+            # pad=0.2: Kutunun iç boşluğunu azalttık (daha zarif durur)
+            bbox_props = dict(boxstyle="square,pad=0.2", fc="w", ec="k", lw=0.5)
+            kw = dict(arrowprops=dict(arrowstyle="-", lw=0.5), bbox=bbox_props, zorder=0, va="center")
+
+            for i, p in enumerate(wedges):
+                val = perc[i]
+                # %1.5 altını gösterme (kalabalığı önler)
+                if val < 0.5: 
+                    continue
+
+                ang = (p.theta2 - p.theta1)/2. + p.theta1
+                y = np.sin(np.deg2rad(ang))
+                x = np.cos(np.deg2rad(ang))
+                
+                horizontalalignment = {-1: "right", 1: "left"}[int(np.sign(x))]
+                connectionstyle = f"angle,angleA=0,angleB={ang}"
+                kw["arrowprops"].update({"connectionstyle": connectionstyle})
+                
+                # Etiket Metni
+                label_text = f"{labels[i]}\n%{val:.1f}"
+                
+                # 3. MESAFE VE PUNTO AYARI
+                # xytext: Çarpanları 1.4'ten 1.2'ye düşürdük (Kutular pastaya yaklaşır)
+                # fontsize: 8 yaparak yazıların devasa olmasını engelledik
+                ax.annotate(label_text, xy=(x, y), xytext=(1.2*np.sign(x), 1.25*y),
+                            horizontalalignment=horizontalalignment, 
+                            fontsize=8,  # <--- KİLİT NOKTA: Yazı boyutu sabitlendi
+                            **kw)
+
+            # 4. STREAMLIT GÖSTERİMİ
+            # use_container_width=False: Grafiği zorla büyütmesini engeller.
+            # Böylece figsize neyse o boyutta basar.
+            st.pyplot(fig, clear_figure=True, use_container_width=False)
+            plt.close(fig)
+
+            # Altına özet metin (isteğe bağlı)
+            st.caption(f"Undercooked: %{perc[0]:.1f} | Cooked: %{perc[1]:.1f} | Overcooked: %{perc[2]:.1f}")
+            st.divider()
+
+    else:
+        st.info("Başlamak için görsel/ler yükle.")
 
 
-        # Arka plan maskeleme
-        def simple_mask_white_bg(bgr, V_thresh=230, min_area=20000):
-            hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-            V = hsv[...,2]
-            m = (V < V_thresh).astype(np.uint8) * 255
-            cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            cnts = [c for c in cnts if cv2.contourArea(c) >= min_area]
-            mask = np.zeros_like(m)
-            if cnts:
-                cv2.drawContours(mask, [max(cnts, key=cv2.contourArea)], -1, 255, thickness=cv2.FILLED)
-            return mask
-
-        # LAB ΔE eşleme (heatmap)
-        def recolor_by_lab(img_bgr, mask):
-            H, W = img_bgr.shape[:2]
-            lab_img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).reshape(-1,3).astype(np.int16)
-            mask_flat = mask.reshape(-1)
-
-            recolored = np.full((lab_img.shape[0], 3), 255, dtype=np.uint8)  # arka plan beyaz
-            idx = np.where(mask_flat > 0)[0]
-            src16 = SRC_LAB.astype(np.int16)
-            for i in idx:
-                pix = lab_img[i]
-                j = np.argmin(np.linalg.norm(src16 - pix, axis=1))
-                recolored[i] = DST_BGR[j]
-            return recolored.reshape(H, W, 3)
-
-        # ============ Streamlit UI ============
-        RAW_COLORS   = ["#818100", "#666732", "#01FEFF", "#32CDFF"]       # açık tonlar
-        COOKED_COLORS= ["#FF99FF", "#FF00FF", "#FFFE67", "#CDCC01", "#01FF01", "#01CC01","#0167CC", "#0101CC"]  # orta tonlar
-        BURNT_COLORS = ["#FE0001", "#C10100"]       # koyu tonlar
-
-        RAW_BGR    = np.array([hex_to_bgr(c) for c in RAW_COLORS], dtype=np.uint8)
-        COOKED_BGR = np.array([hex_to_bgr(c) for c in COOKED_COLORS], dtype=np.uint8)
-        BURNT_BGR  = np.array([hex_to_bgr(c) for c in BURNT_COLORS], dtype=np.uint8)
-
-    # --- Streamlit UI ---
-        st.set_page_config(page_title="Pişme Analizi", layout="wide")
-        st.title("Börek Analizi")
-
-        uploads = st.file_uploader("Görselleri yükle (tek/çoklu)", type=["jpg","jpeg","png"], accept_multiple_files=True)
-
-        if uploads:
-            for up in uploads:
-                file_bytes = np.frombuffer(up.read(), np.uint8)
-                bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-                assert bgr is not None, f"Görsel okunamadı: {up.name}"
-
-                mask = simple_mask_white_bg(bgr)
-                heat_bgr = recolor_by_lab(bgr, mask)
-
-                c1, c2 = st.columns(2, gap="small")
-                with c1:
-                    st.subheader("Orijinal")
-                    st.image(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), use_container_width=True)
-                with c2:
-                    st.subheader("Pişme Analizi")
-                    st.image(cv2.cvtColor(heat_bgr, cv2.COLOR_BGR2RGB), use_container_width=True)
-
-                # --- Pie chart için 3 grup sayımı ---
-                mask_idx = mask > 0
-                heat_flat = heat_bgr[mask_idx]
-
-                def count_in_group(flat, group_bgr):
-                    total = 0
-                    for c in group_bgr:
-                        total += np.count_nonzero(np.all(flat == c, axis=1))
-                    return total
-
-                raw_count    = count_in_group(heat_flat, RAW_BGR)
-                cooked_count = count_in_group(heat_flat, COOKED_BGR)
-                burnt_count  = count_in_group(heat_flat, BURNT_BGR)
-
-                counts = [raw_count, cooked_count, burnt_count]
-                total = max(sum(counts), 1)
-                perc = [100.0*c/total for c in counts]
-
-                # --- Pie chart ---
-                fig, ax = plt.subplots(figsize=(2,2), dpi=110)
-                labels = ["Undercooked", "Cooked", "Overcooked"]
-                colors = ["#FFFF66", "#FF9900", "#C10100"]  # görsellik için basit renkler
-                ax.pie(counts, 
-                       labels=labels, 
-                       colors=colors, 
-                       startangle=90,
-                        counterclock=False, 
-                    autopct=lambda p: f"{p:.1f}%" if p > 0 else "",
-                    pctdistance=0.78,
-                    labeldistance=1.08,
-                    wedgeprops=dict(linewidth=0.8, edgecolor="white")
-                      )
-                ax.axis("equal")
-                st.pyplot(fig, clear_figure=True)
-                plt.close(fig)
-
-                st.markdown(
-                    f"**Undercooked:** {perc[0]:.1f}% &nbsp;&nbsp;|&nbsp;&nbsp; "
-                    f"**Cooked:** {perc[1]:.1f}% &nbsp;&nbsp;|&nbsp;&nbsp; "
-                    f"**Overcooked:** {perc[2]:.1f}%"
-                )
-                st.divider()
-        else:
-            st.info("Başlamak için görsel/ler yükle.")
 def run_smallcake():
     import cv2, numpy as np, matplotlib.pyplot as plt
     import streamlit as st
@@ -1240,7 +1235,6 @@ else:
 
 
  
-
 
 
 
