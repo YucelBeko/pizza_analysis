@@ -2,26 +2,115 @@ import cv2
 import numpy as np
 import streamlit as st
 import matplotlib.pyplot as plt
+import base64
+import pandas as pd, os, glob
+from matplotlib.colors import Normalize, BoundaryNorm, ListedColormap
+import matplotlib.cm as cm
+try:
+    from sklearn.cluster import KMeans
+except Exception:
+    KMeans = None
+from matplotlib.patches import Patch
+# ========================================== LIBRARY & SESSION AYARLARI ==========================================
+if "current_page" not in st.session_state:
+    st.session_state.current_page = "Home"
 
-#st.set_page_config(page_title="Seç: Patates / Pizza", layout="centered")
-st.sidebar.title("Uygulama Seçimi")
-page = st.sidebar.radio("Ekran", ["Patates", "Pizza","Börek","Small Cake"], index=0)
-st.markdown(
-            """
-            <style>
-                /* Sidebar'ın en üst boşluğunu kaldır */
-                section[data-testid="stSidebar"] > div:first-child {
-                    padding-top: 0rem;
-                    margin-top: -3rem;
-                }
-            </style>
+# Sayfa Değiştirme Fonksiyonu
+def change_page(page_name):
+    st.session_state.current_page = page_name
+
+# Resim Okuma Fonksiyonu (Cache'li)
+@st.cache_data(show_spinner=False)  
+def get_img_as_base64(file_path):
+    try:
+        with open(file_path, "rb") as f:
+            data = f.read()
+        return base64.b64encode(data).decode()
+    except FileNotFoundError:
+        return None
+
+# HTML Resim Ortala Fonksiyonu
+def centered_local_img(file_path, width=150, height=100):
+    img_b64 = get_img_as_base64(file_path)
+    if img_b64:
+        img_tag = f'<img src="data:image/png;base64,{img_b64}" width="{width}" height="{height}" style="border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); object-fit: cover;">'
+        st.markdown(
+            f"""
+            <div style="display: flex; justify-content: center; align-items: center; margin-bottom: 15px;">
+                {img_tag}
+            </div>
             """,
             unsafe_allow_html=True
         )
-# Sidebar'da tek reset butonu
-if st.sidebar.button(" Reset"):
-    st.session_state["uploader"] = None
+    else:
+        st.warning(f"Görsel Yok: {file_path}")
 
+# ==========================================
+# 2. AÇILIŞ SAYFASI TASARIMI
+# ==========================================
+def show_home_page():
+    # Sidebar'ı gizle
+    st.markdown("""<style>[data-testid="stSidebar"] {display: none;}</style>""", unsafe_allow_html=True)
+    
+    # --- LOGO ALANI ---
+    img_b64 = get_img_as_base64("Lab_Logo.png")
+    
+    st.markdown("<div style='text-align: center; padding-top: 30px; margin-bottom: 20px;'>", unsafe_allow_html=True)
+    
+    if img_b64:
+        st.markdown(
+            f"""
+            <div style="display: flex; justify-content: center;">
+                <img src="data:image/png;base64,{img_b64}" width="440" 
+                     style="border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.15);">
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
+    else:
+        st.image("https://cdn-icons-png.flaticon.com/512/1046/1046857.png", width=150)
+        
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # --- BAŞLIK ALANI ---
+    st.markdown(
+        """
+        <h1 style='text-align: center; color: #2C3E50; font-family: sans-serif; font-size: 3rem; margin-bottom: 10px;'>
+            Pişirme Laboratuvarı
+        </h1>
+        <h3 style='text-align: center; color: #7F8C8D; font-weight: 300; margin-top: 0;'>
+            Performans Analiz Paneli
+        </h3>
+        <br>
+        <div style="text-align: center; max-width: 700px; margin: 0 auto; background-color: #f8f9fa; padding: 20px; border-radius: 12px; border: 1px solid #e9ecef;">
+            <p style='color: #555; font-size: 1.1rem; margin: 0; line-height: 1.6;'>
+                 Aşağıdaki kategorilerden ürün seçimi yaparak 
+                <b>pişme oranı, renk dağılımı ve kalite standartlarını</b> yapay zeka ile analiz edebilirsiniz.
+            </p>
+        </div>
+        <br><br>
+        """, 
+        unsafe_allow_html=True
+    )
+
+    # --- KARTLAR ---
+    c1, c2, c3, c4 = st.columns(4, gap="medium")
+
+    with c1:
+        centered_local_img("Patates_Logo.png") 
+        st.button("Patates Analizi", use_container_width=True, on_click=change_page, args=("Patates",))
+    with c2:
+        centered_local_img("Pizza_Logo.png")
+        st.button("Pizza Analizi", use_container_width=True, on_click=change_page, args=("Pizza",))
+    with c3:
+        centered_local_img("Borek_Logo.png")
+        st.button("Börek Analizi", use_container_width=True, on_click=change_page, args=("Börek",))
+    with c4:
+        centered_local_img("Smallcake_Logo.png")
+        st.button("Kek Analizi", use_container_width=True, on_click=change_page, args=("Small Cake",))
+
+
+######################################## ANALIZLER ########################################
 
 def run_potato():
     #st.title("Patates Kızartması Analizi")
@@ -237,22 +326,6 @@ def run_potato():
             st.info("Başlamak için görsel/ler yükle.")
 
 def run_pizza():
-    #st.title("Pizza Analizi")
-    #up_files = st.file_uploader("Görsel yükle", type=["jpg","jpeg","png"], accept_multiple_files=True)
-    #if not up_files:
-        #st.info("Başlamak için görsel yükleyin."); return
-    #for up in up_files: 
-        # app.py — 5 sınıf (burnt dahil) • KMeans + Isı Haritası (özel HEX palet)
-        # Kurulum: pip install streamlit opencv-python-headless numpy pandas matplotlib pillow scikit-learn
-        import numpy as np, pandas as pd, cv2, os, glob, matplotlib.pyplot as plt
-        from matplotlib.colors import Normalize, BoundaryNorm, ListedColormap
-        import matplotlib.cm as cm
-
-        # --- KMeans
-        try:
-            from sklearn.cluster import KMeans
-        except Exception:
-            KMeans = None
         st.markdown(
             """
             <style>
@@ -268,7 +341,7 @@ def run_pizza():
         st.title("Pizza Analizi")
 
         # =========================
-        # MASKE SABİTLERİ (senin verdiğinler)
+        # MASKE SABİTLERİ
         # =========================
         HSV_V_BLACK_MAX = 40
         HSV_V_GLARE_MIN = 225
@@ -281,6 +354,7 @@ def run_pizza():
         DOUGH_L_MIN, DOUGH_L_MAX = 100, 250
         DOUGH_A_MIN, DOUGH_A_MAX = -5,  10
         DOUGH_B_MIN, DOUGH_B_MAX =  0,  60
+        
         # --- Yanık sınıfını sıkılaştırma (yalnızca siyahımsı pikseller 'burnt')
         # --- Yanık (siyahımsı) için hibrit eşikler (LAB + HSV)
         BURNT_L_MAX = 120        # 0..255  (düşük L = koyu)
@@ -293,7 +367,7 @@ def run_pizza():
         REGION_BINS = (0, 0.2, 0.4, 0.6, 0.8, 1.0)      # renk skalası dilimleri (0-100%)
 
         CONTOUR_COLOR = (0,255,0)
-        CONTOUR_THICK = 3
+        CONTOUR_THICK = 1
 
         # Sınıf isimleri (L artan: koyudan açığa)
         CLASS_NAMES = ["burnt", "dark_brown", "brown", "light_brown", "dough"]
@@ -800,32 +874,71 @@ def run_pizza():
                 labels = st.session_state.km_class_order
                 vals = [perc[k]*100 for k in labels]
                 colors =["#FF0000","#CCCC00","#FFFF66","#FFFFAD","#FF99FF"]  # dough, light_brown, brown, dark_brown, burnt
-                fig2, ax2 = plt.subplots(figsize=(6,3.2),dpi = 180)
-                ax2.bar(labels, vals,color = colors); ax2.set_ylim(0, max(100, (max(vals) if vals else 100)*1.15))
-                ax2.set_ylabel("%"); ax2.grid(axis="y", alpha=.3)
-                ax2.set_title(f"Yüzdeler • Dominant: {dominant}")
+                # Sıralama: Dough -> Light Brown -> Brown -> Dark Brown -> Burnt
+                display_order = ["Dough", "Light Brown", "Brown", "Dark Brown", "Burnt"]
+                # Senin tanımladığın özel renk paleti
+                display_colors = ["#FF99FF", "#FFFFB5", "#FFFF66", "#CCCC00", "#FF0000"]
                 
-                
-                #st.pyplot(fig2, clear_figure=True); plt.close(fig2)
-                        # --- Pie chart (yüzdeler) ---
-                labels = st.session_state.km_class_order                    # ["burnt","dark_brown","brown","light_brown","dough"]
-                vals   = [perc[k]*100 for k in labels]
-                colors = ["#FF0000","#CCCC00","#FFFF66","#FFFFAD","#FF99FF"]
+                # Sözlükten (counts) listeye çevir
+                counts_list = [counts.get(k, 0) for k in display_order]
+                total = sum(counts_list) if sum(counts_list) > 0 else 1
+                perc_list = [100.0 * c / total for c in counts_list]
 
-                figp, axp = plt.subplots(figsize=(4, 4), dpi=180)
-                wedges, texts, autotexts = axp.pie(
-                    vals,
-                    labels=labels,
-                    colors=colors,
-                    startangle=90,
-                    autopct=lambda p: f"{p:.1f}%" if p >= 1 else "",  # %1'den küçükleri yazma
-                    pctdistance=0.78,
-                    labeldistance=1.08,
-                    wedgeprops=dict(linewidth=0.8, edgecolor="white")
+                # --- GRAFİK: DONUT CHART (EXCEL TARZI OKLU) ---
+                # figsize=(5, 3) ile kompakt tutuyoruz
+                fig, ax = plt.subplots(figsize=(5, 3), dpi=100)
+                
+                wedges, texts = ax.pie(
+                    perc_list, 
+                    colors=display_colors, 
+                    startangle=90, 
+                    counterclock=False, # Saat yönünde (Dough'dan Burnt'a)
+                    wedgeprops=dict(width=0.4, edgecolor="white", linewidth=1) # Donut halkası
                 )
-                axp.axis("equal")  # daire
-                axp.set_title("Browness Distrubition ")
-                st.pyplot(figp, clear_figure=True); plt.close(figp)
+                
+                # Etiket Kutusu ve Ok Ayarları
+                bbox_props = dict(boxstyle="square,pad=0.2", fc="w", ec="k", lw=0.5)
+                kw = dict(arrowprops=dict(arrowstyle="-", lw=0.5), bbox=bbox_props, zorder=0, va="center")
+
+                for i, p in enumerate(wedges):
+                    val = perc_list[i]
+                    # %1.0'dan küçük dilimleri etiketleyip kalabalık yapmayalım
+                    if val < 1.0: 
+                        continue
+
+                    # Açıyı hesapla
+                    ang = (p.theta2 - p.theta1)/2. + p.theta1
+                    y = np.sin(np.deg2rad(ang))
+                    x = np.cos(np.deg2rad(ang))
+                    
+                    # Ok yönü
+                    horizontalalignment = {-1: "right", 1: "left"}[int(np.sign(x))]
+                    kw["arrowprops"].update({"connectionstyle": f"angle,angleA=0,angleB={ang}"})
+                    
+                    # Etiket Metni (Sınıf Adı ve Yüzde)
+                    # Dough gibi uzun isimler için gerekirse kısaltma yapılabilir ama şimdilik tam basıyoruz
+                    ax.annotate(f"{display_order[i]}\n%{val:.1f}", 
+                                xy=(x, y), 
+                                xytext=(1.25*np.sign(x), 1.3*y), # Oku biraz dışarı aç
+                                horizontalalignment=horizontalalignment, 
+                                fontsize=8, # Yazı boyutu sabit
+                                **kw)
+                
+                # use_container_width=False diyerek figsize'a sadık kalmasını sağlıyoruz
+                st.pyplot(fig, clear_figure=True, use_container_width=False)
+                plt.close(fig)
+
+                # Altına sade bir metin özeti (okuması zor olanlar için)
+                st.caption(
+                    f"Hamur: %{perc_list[0]:.1f} | "
+                    f"İdeal: %{perc_list[1]+perc_list[2]+perc_list[3]:.1f} | "
+                    f"Yanık: %{perc_list[4]:.1f}"
+                )
+                st.divider()
+
+                
+
+                
                 # --- Ek toplam yüzdeler ---
                 burnt       = perc["Burnt"] * 100
                 dough       = perc["Dough"] * 100
@@ -938,54 +1051,116 @@ def run_borek():
             # ==========================================
             # 1. FIGSIZE: (4, 2.5) yaparak fiziksel boyutu küçültüyoruz.
             # DPI: 100 standarttır, artırırsanız yazılar yine devleşebilir.
-            fig, ax = plt.subplots(figsize=(4, 2.5), dpi=100)
-
-            wedges, texts = ax.pie(
-                counts, 
-                colors=colors, 
-                startangle=90, 
-                counterclock=False,
-                wedgeprops=dict(width=0.4, edgecolor="white", linewidth=1) # Donut halkasını incelttim (0.4)
+            # ==========================================
+            #   WAFFLE CHART (KARE KARE ANALİZ)
+            # ==========================================
+            # Toplam 100 karelik bir tepsi hayal edelim (10x10 veya 5x20)
+            # Kullanıcıya seçim şansı veriyoruz
+            chart_type = st.radio(
+                "Grafik Türünü Seç:",
+                ["Pasta (Donut)", "Waffle (Tepsi Görünümü)", "Yatay Çubuk (Bar)"],
+                horizontal=True,
+                index=0
             )
 
-            # 2. KUTU VE YAZI AYARLARI
-            # pad=0.2: Kutunun iç boşluğunu azalttık (daha zarif durur)
-            bbox_props = dict(boxstyle="square,pad=0.2", fc="w", ec="k", lw=0.5)
-            kw = dict(arrowprops=dict(arrowstyle="-", lw=0.5), bbox=bbox_props, zorder=0, va="center")
+            fig = None # Figure placeholder
 
-            for i, p in enumerate(wedges):
-                val = perc[i]
-                # %1.5 altını gösterme (kalabalığı önler)
-                if val < 0.5: 
-                    continue
+            # -------------------------------------------------------
+            # SEÇENEK 1: PASTA (DONUT) - Excel Tarzı
+            # -------------------------------------------------------
+            if chart_type == "Pasta (Donut)":
+                fig, ax = plt.subplots(figsize=(4, 2.5), dpi=100)
+                wedges, texts = ax.pie(
+                    counts, 
+                    colors=colors, 
+                    startangle=90, 
+                    counterclock=False,
+                    wedgeprops=dict(width=0.4, edgecolor="white", linewidth=1)
+                )
+                
+                # Excel tarzı oklu etiketleme
+                bbox_props = dict(boxstyle="square,pad=0.2", fc="w", ec="k", lw=0.5)
+                kw = dict(arrowprops=dict(arrowstyle="-", lw=0.5), bbox=bbox_props, zorder=0, va="center")
 
-                ang = (p.theta2 - p.theta1)/2. + p.theta1
-                y = np.sin(np.deg2rad(ang))
-                x = np.cos(np.deg2rad(ang))
-                
-                horizontalalignment = {-1: "right", 1: "left"}[int(np.sign(x))]
-                connectionstyle = f"angle,angleA=0,angleB={ang}"
-                kw["arrowprops"].update({"connectionstyle": connectionstyle})
-                
-                # Etiket Metni
-                label_text = f"{labels[i]}\n%{val:.1f}"
-                
-                # 3. MESAFE VE PUNTO AYARI
-                # xytext: Çarpanları 1.4'ten 1.2'ye düşürdük (Kutular pastaya yaklaşır)
-                # fontsize: 8 yaparak yazıların devasa olmasını engelledik
-                ax.annotate(label_text, xy=(x, y), xytext=(1.2*np.sign(x), 1.25*y),
-                            horizontalalignment=horizontalalignment, 
-                            fontsize=8,  # <--- KİLİT NOKTA: Yazı boyutu sabitlendi
-                            **kw)
+                for i, p in enumerate(wedges):
+                    val = perc[i]
+                    if val < 1.0: continue # %1 altını etiketleme
 
-            # 4. STREAMLIT GÖSTERİMİ
-            # use_container_width=False: Grafiği zorla büyütmesini engeller.
-            # Böylece figsize neyse o boyutta basar.
+                    ang = (p.theta2 - p.theta1)/2. + p.theta1
+                    y = np.sin(np.deg2rad(ang))
+                    x = np.cos(np.deg2rad(ang))
+                    
+                    horizontalalignment = {-1: "right", 1: "left"}[int(np.sign(x))]
+                    kw["arrowprops"].update({"connectionstyle": f"angle,angleA=0,angleB={ang}"})
+                    
+                    ax.annotate(f"{labels[i]}\n%{val:.1f}", xy=(x, y), xytext=(1.2*np.sign(x), 1.25*y),
+                                horizontalalignment=horizontalalignment, fontsize=8, **kw)
+
+            # -------------------------------------------------------
+            # SEÇENEK 2: WAFFLE CHART - Kare Kare Analiz
+            # -------------------------------------------------------
+            elif chart_type == "Waffle (Tepsi Görünümü)":
+                # Görsel olarak tam sayıya yuvarlanır (kare boyamak için)
+                # Ama lejantta gerçek 'perc' değerini yazarız.
+                total_squares = 100
+                counts_per_class = [int(p) for p in perc]
+                
+                # Toplam 100 etmezse farkı en büyük sınıfa ekle
+                diff = total_squares - sum(counts_per_class)
+                counts_per_class[np.argmax(counts_per_class)] += diff
+                
+                # Matrisi oluştur
+                waffle_grid = []
+                for class_id, count in enumerate(counts_per_class):
+                    waffle_grid.extend([class_id] * count)
+                waffle_arr = np.array(waffle_grid).reshape((10, 10))
+                
+                cmap_waffle = plt.cm.colors.ListedColormap(colors)
+                
+                fig, ax = plt.subplots(figsize=(5, 4), dpi=100)
+                ax.matshow(waffle_arr, cmap=cmap_waffle, vmin=0, vmax=2)
+                
+                # Izgara görünümü
+                ax.set_xticks(np.arange(-0.5, 10, 1), minor=True)
+                ax.set_yticks(np.arange(-0.5, 10, 1), minor=True)
+                ax.grid(which='minor', color='w', linestyle='-', linewidth=2)
+                ax.set_xticks([]); ax.set_yticks([])
+                
+                # Lejant (Burada gerçek ondalıklı değerleri kullanıyoruz)
+                
+                legend_elements = [
+                    Patch(facecolor=colors[i], edgecolor='w', label=f'{labels[i]} (%{perc[i]:.1f})')
+                    for i in range(3)
+                ]
+                ax.legend(handles=legend_elements, loc='upper center', bbox_to_anchor=(0.5, -0.05),
+                          ncol=3, frameon=False, fontsize=9)
+            
+            # -------------------------------------------------------
+            # SEÇENEK 3: YATAY ÇUBUK (BAR) - Minimalist
+            # -------------------------------------------------------
+            else:
+                fig, ax = plt.subplots(figsize=(6, 1.5), dpi=100)
+                # Yığılmış çubuk
+                left_pos = 0
+                for i in range(3):
+                    ax.barh(0, perc[i], left=left_pos, color=colors[i], edgecolor="white", height=0.6, label=labels[i])
+                    
+                    # Dilim büyükse içine yaz
+                    if perc[i] > 5:
+                        ax.text(left_pos + perc[i]/2, 0, f"%{perc[i]:.1f}", 
+                                ha='center', va='center', color='black', fontsize=9, fontweight='bold')
+                    left_pos += perc[i]
+
+                ax.axis('off')
+                ax.set_xlim(0, 100)
+                ax.legend(loc='lower center', bbox_to_anchor=(0.5, -0.5), ncol=3, frameon=False, fontsize=9)
+
+            # --- Çizim ve Temizlik ---
             st.pyplot(fig, clear_figure=True, use_container_width=False)
             plt.close(fig)
-
-            # Altına özet metin (isteğe bağlı)
-            st.caption(f"Undercooked: %{perc[0]:.1f} | Cooked: %{perc[1]:.1f} | Overcooked: %{perc[2]:.1f}")
+            
+            # Ekstra metin özeti (Her zaman görünür)
+            st.caption(f"Detaylı Oranlar: Çiğ %{perc[0]:.2f} | Pişmiş %{perc[1]:.2f} | Yanık %{perc[2]:.2f}")
             st.divider()
 
     else:
@@ -993,8 +1168,7 @@ def run_borek():
 
 
 def run_smallcake():
-    import cv2, numpy as np, matplotlib.pyplot as plt
-    import streamlit as st
+
     
 
     # ---------- Sayfa ----------
@@ -1217,22 +1391,33 @@ def run_smallcake():
         st.divider()
 
 
+# ==========================================
+#  ROUTER (YÖNLENDİRME)
+# ==========================================
 
-    # --- Router ---
-if page == "Patates":
-    run_potato()
-elif page == "Pizza":
-    run_pizza()
-elif page == "Börek":
-    run_borek()
+if st.session_state.current_page == "Home":
+    show_home_page()
+
 else:
-    run_smallcake()
+    # İç sayfalarda sidebar geri gelsin
+    with st.sidebar:
+        st.markdown("""<style>[data-testid="stSidebar"] {display: block;}</style>""", unsafe_allow_html=True)
         
+        if st.button("🏠 Ana Sayfa", use_container_width=True, on_click=change_page, args=("Home",)):
+            pass # on_click zaten işi yapıyor
+        
+        st.divider()
+        st.caption(f"Mod: {st.session_state.current_page}")
 
-
-
-
-
+    # Fonksiyonları Çalıştır
+    if st.session_state.current_page == "Patates":
+        run_potato()
+    elif st.session_state.current_page == "Pizza":
+        run_pizza()
+    elif st.session_state.current_page == "Börek":
+        run_borek()
+    elif st.session_state.current_page == "Small Cake":
+        run_smallcake()
 
  
 
