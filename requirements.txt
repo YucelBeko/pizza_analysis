@@ -4,3 +4,6 @@ pandas
 opencv-python-headless
 matplotlib
 scikit-learn
+os
+glob
+base64
