@@ -893,7 +893,7 @@ def run_pizza():
                     colors=display_colors, 
                     startangle=90, 
                     counterclock=False, # Saat yönünde (Dough'dan Burnt'a)
-                    wedgeprops=dict(width=0.4, edgecolor="white", linewidth=1) # Donut halkası
+                    #wedgeprops=dict(width=0.4, edgecolor="white", linewidth=1) # Donut halkası
                 )
                 
                 # Etiket Kutusu ve Ok Ayarları
@@ -1420,6 +1420,7 @@ else:
         run_smallcake()
 
  
+
 
 
 
