@@ -325,647 +325,417 @@ def run_potato():
         else:
             st.info("Başlamak için görsel/ler yükle.")
 
+
+import streamlit as st
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap, BoundaryNorm
+from matplotlib import cm
+import matplotlib as mpl
+
+# Set matplotlib backend to Agg to avoid thread issues in Streamlit
+mpl.use("Agg")
+
 def run_pizza():
-        st.markdown(
-            """
-            <style>
-            .block-container h1 {
-                margin-top: -80px;   /* başlığın üst boşluğunu azaltır */
-            }
-            </style>
-            """,
-            unsafe_allow_html=True
+    # CSS to reduce top margin
+    st.markdown(
+        """
+        <style>
+        .block-container h1 { margin-top: -80px; }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+    st.set_page_config(page_title="Pizza Analysis", layout="wide")
+
+    st.title("Pizza Analysis")
+
+    # ==========================================
+    # 1. UNIVERSAL COLOR CENTERS (Fixed Model)
+    # ==========================================
+    # These coordinates represent the ideal "center" for each class in LAB color space.
+    # Format: [L (Lightness), A (Green-Red), B (Blue-Yellow)]
+    UNIVERSAL_CENTERS = np.array([
+        [ 30.0,   2.0,   2.0],  # BURNT: Very dark, low saturation.
+        [ 65.0,  18.0,  25.0],  # DARK BROWN: Dark but has reddish/orange tint.
+        [145.0,  25.0,  50.0],  # BROWN: Golden/Cooked cheese color.
+        [215.0,  10.0,  40.0],  # LIGHT BROWN: Pale yellow/white transition.
+        [245.0,   1.0,   5.0]   # DOUGH: Raw dough, nearly white/grey.
+    ], dtype=np.float32)
+
+    CLASS_NAMES = ["Burnt", "Dark Brown", "Brown", "Light Brown", "Dough"]
+
+    # ==========================================
+    # 2. MASKING THRESHOLDS
+    # ==========================================
+    # -- HSV Thresholds (For Background/Tray Removal) --
+    # Pixels darker than this V value are considered background/tray.
+    # Increase if the tray is being detected as burnt pizza.
+    HSV_V_BLACK_MAX = 40 
+    
+    # Glare detection: High Value (V) but Low Saturation (S) = White Glare.
+    HSV_V_GLARE_MIN = 235
+    HSV_S_GLARE_MAX = 30
+
+    # -- LAB Thresholds (For Pizza Inclusion) --
+    # L_MIN is kept low (1) to ensure dark burnt edges are included in the initial mask.
+    LAB_L_MIN, LAB_L_MAX =   1, 255
+    LAB_A_MIN, LAB_A_MAX =   0, 100
+    LAB_B_MIN, LAB_B_MAX =   0, 130
+
+    # -- Dough Specific Thresholds --
+    DOUGH_L_MIN, DOUGH_L_MAX = 100, 300
+    DOUGH_A_MIN, DOUGH_A_MAX = -5,  10
+    DOUGH_B_MIN, DOUGH_B_MAX =  0,  60
+
+    # ==========================================
+    # COLOR PALETTE
+    # ==========================================
+    # Hex codes for visualization: Dough -> Burnt
+    CUSTOM_HEX = ["#FF99FF", "#FFFFB5", "#FFFF66", "#CCCC00", "#FF0000"] 
+    
+    def make_custom_cmap():
+        cmap = ListedColormap(CUSTOM_HEX, name="pizza5")
+        bins = np.linspace(0.0, 1.0, 6)
+        norm = BoundaryNorm(bins, ncolors=cmap.N, clip=True)
+        return cmap, norm, bins
+
+    CMAP5, NORM5, BINS5 = make_custom_cmap()
+
+    # ==========================================
+    # 3. MASKING LOGIC (PRUNING METHOD)
+    # ==========================================
+    def hsv_exclusion_mask(img):
+        """Creates a mask of pixels to EXCLUDE (Background & Glare)."""
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        S, V = hsv[...,1], hsv[...,2]
+        return (V <= HSV_V_BLACK_MAX) | ((V >= HSV_V_GLARE_MIN) & (S <= HSV_S_GLARE_MAX))
+
+    def lab_inclusion_mask(img):
+        """Creates a mask of pixels to INCLUDE based on broad color ranges."""
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.int16)
+        L, A0, B0 = lab[...,0], lab[...,1]-128, lab[...,2]-128
+        brown = (L >= LAB_L_MIN) & (L <= LAB_L_MAX) & \
+                (A0 >= LAB_A_MIN) & (A0 <= LAB_A_MAX) & \
+                (B0 >= LAB_B_MIN) & (B0 <= LAB_B_MAX)
+        dough = (L >= DOUGH_L_MIN) & (L <= DOUGH_L_MAX) & \
+                (A0 >= DOUGH_A_MIN) & (A0 <= DOUGH_A_MAX) & \
+                (B0 >= DOUGH_B_MIN) & (B0 <= DOUGH_B_MAX)
+        return (brown | dough)
+
+    def keep_largest_component(mask_u8):
+        """Removes small noise blobs, keeping only the largest object (the pizza)."""
+        m = (mask_u8 > 0).astype(np.uint8)
+        n, lab, stats, _ = cv2.connectedComponentsWithStats(m)
+        if n <= 1: return m * 255
+        # Index 0 is background, start from 1
+        k = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+        return ((lab == k).astype(np.uint8) * 255)
+
+    def build_pizza_mask_pruned(img, keep_only_largest=True):
+        """
+        Generates the final binary mask using 'Pruning' logic.
+        1. Creates a loose mask.
+        2. Aggressively erodes (opens) it to sever connections between the pizza and background noise.
+        3. Keeps the largest component.
+        4. Dilates (closes) it back to restore the original shape.
+        """
+        # 1. Base Mask
+        inc = lab_inclusion_mask(img)
+        exc = hsv_exclusion_mask(img)
+        m0  = (inc & (~exc)).astype(np.uint8) * 255
+        
+        # 2. Pruning (Morphological Open)
+        # Using a large kernel (9x9) and high iterations (5) to strip away edge noise.
+        # Decreasing iterations preserves more edge detail but may keep background noise.
+        pruning_kernel = np.ones((1,1), np.uint8) 
+        m_pruned = cv2.morphologyEx(m0, cv2.MORPH_OPEN, pruning_kernel, iterations=1)
+
+        # 3. Component Selection
+        if keep_only_largest:
+            m_main = keep_largest_component(m_pruned)
+        else:
+            m_main = m_pruned
+
+        # 4. Restoration (Morphological Close)
+        # Fills in holes created by the pruning process.
+        closing_kernel = np.ones((1,1), np.uint8)
+        m_final = cv2.morphologyEx(m_main, cv2.MORPH_CLOSE, closing_kernel, iterations=20)
+        
+        return m_final
+    
+    def outline_on(img, mask_u8):
+        """Draws a green contour around the detected mask."""
+        out = img.copy()
+        if (mask_u8 > 0).any():
+            cnts, _ = cv2.findContours((mask_u8 > 0).astype(np.uint8),
+                                       cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            # Thickness 20 for visibility
+            cv2.drawContours(out, cnts, -1, (0, 255, 0), 20, lineType=cv2.LINE_AA)
+        return out
+
+    # ==========================================
+    # 4. ANALYSIS ENGINE (CLASSIFICATION)
+    # ==========================================
+    def predict_universal_map(img_bgr, mask_u8, centers, class_order):
+        H, W = mask_u8.shape
+        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.int16)
+        L, A0, B0 = lab[...,0], lab[...,1]-128, lab[...,2]-128
+        hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+        S, V = hsv[...,1].astype(np.int16), hsv[...,2].astype(np.int16)
+        m = (mask_u8 > 0)
+
+        class_idx = np.full((H,W), -1, dtype=np.int16)
+        if not np.any(m):
+            counts = {c:0 for c in class_order}; perc = {c:0.0 for c in class_order}; dom = None
+            return class_idx, counts, perc, dom
+
+        # --- Step 1: KNN Classification (Euclidean Distance) ---
+        X = np.stack([L[m], A0[m], B0[m]], axis=1).astype(np.float32)
+        dists = np.linalg.norm(X[:, None, :] - centers[None, :, :], axis=2)
+        labels = np.argmin(dists, axis=1)
+        class_idx[m] = labels
+
+        burnt_i = 0 
+        dark_i  = 1 
+        brown_i = 2 
+        light_i = 3 
+        dough_i = 4 
+
+        # --- Step 2: Hard Rules & Logic Corrections ---
+
+        # Rule A: Charcoal/Ash Detection
+        # L < 85: Pixels this dark are burnt regardless of color.
+        is_charcoal = (L < 85) & m  
+        
+        # Matte Black Detection: Dark pixels (up to L=115) with very low color (A&B < 20).
+        is_ash = (L >= 85) & (L < 115) & (A0 < 20) & (B0 < 20) & m
+
+        # Shiny Burnt Detection: High Value (V) but low Saturation (S).
+        is_shiny_burnt = (V < 190) & (S < 40) & (L < 180) & m
+
+        # Apply Burnt overrides
+        true_burnt_mask = (is_charcoal | is_ash | is_shiny_burnt)
+        class_idx[true_burnt_mask] = burnt_i
+
+        # Rule B: Shadow/Crack Protection
+        # If labeled Burnt, but has significant Red/Yellow (A or B > 20), it's just a dark shadow.
+        shadow_in_burnt = (class_idx == burnt_i) & ((A0 > 20) | (B0 > 20)) & m
+        class_idx[shadow_in_burnt] = dark_i
+
+        # Rule C: Brown Expansion
+        # If labeled Light Brown but is darker than L=185, force it to Brown.
+        should_be_brown = (class_idx == light_i) & (L < 185) & m
+        class_idx[should_be_brown] = brown_i
+
+        # Rule D: Dough Tolerance
+        # If labeled Dough but has some color (A>5 or B>25), it's likely Light Brown.
+        fake_dough = (class_idx == dough_i) & ((A0 > 5) | (B0 > 25)) & m
+        class_idx[fake_dough] = light_i
+
+        # --- Statistics ---
+        counts = {c: int(np.count_nonzero(class_idx == i)) for i,c in enumerate(class_order)}
+        tot = sum(counts.values())
+        perc = {c: (counts[c]/tot if tot>0 else 0.0) for c in class_order}
+        dominant = max(class_order, key=lambda c: counts[c]) if tot>0 else None
+        
+        return class_idx, counts, perc, dominant
+
+    # ==========================================
+    # 5. VISUALIZATION HELPERS
+    # ==========================================
+    def pct_line(perc: dict, order: list[str]) -> str:
+        """Returns a single line string of percentages."""
+        return " | ".join(f"{k}: {perc[k]*100:.1f}%" for k in order)
+
+    def heatmap_overlay(img_bgr, class_idx, class_order, alpha=0.6, cmap=CMAP5, norm=NORM5):
+        """Overlays the analyzed colors onto the original image."""
+        n = len(class_order)
+        score = np.zeros(class_idx.shape, dtype=np.float32)
+        valid = (class_idx >= 0)
+        # Map indices to score (0..1) for colormap
+        score[valid] = 1.0 - (class_idx[valid].astype(np.float32) / (n-1))
+        sm = cm.ScalarMappable(norm=norm, cmap=cmap)
+        colored = (sm.to_rgba(score)[...,:3] * 255).astype(np.uint8)
+        colored_bgr = colored[..., ::-1]
+        out = img_bgr.copy().astype(np.float32)
+        out[valid] = (1-alpha)*out[valid] + alpha*colored_bgr[valid]
+        return np.clip(out,0,255).astype(np.uint8)
+
+    def show_heatmap_figure(img_bgr, overlay_bgr, cmap=CMAP5, norm=NORM5, bins=BINS5):
+        """Creates the Matplotlib figure with original image, heatmap, and colorbar."""
+        fig, axes = plt.subplots(1,3, figsize=(14,5), gridspec_kw={"width_ratios":[1,1,0.06]}, dpi=100)
+        axes[0].imshow(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)); axes[0].set_title(""); axes[0].axis("off")
+        axes[1].imshow(cv2.cvtColor(overlay_bgr, cv2.COLOR_BGR2RGB)); axes[1].set_title(""); axes[1].axis("off")
+        cbar = plt.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap), cax=axes[2])
+        tick_pos = [(bins[i]+bins[i+1])/2 for i in range(len(bins)-1)]
+        cbar.set_ticks(tick_pos); cbar.set_ticklabels(["Dough","Light Brown","Brown","Dark Brown","Burnt"])
+        plt.tight_layout()
+        return fig
+
+    # ==========================================
+    # 6. MAIN UI EXECUTION
+    # ==========================================
+    
+    # Sidebar for upload only
+    with st.sidebar:
+        st.markdown("""<style>section[data-testid="stSidebar"] > div:first-child {padding-top: 0rem; margin-top: -3rem;}</style>""", unsafe_allow_html=True)
+        st.sidebar.title("Settings")
+        # Regional analysis sliders removed as requested.
+
+    files = st.file_uploader("Upload Images", type=["jpg","jpeg","png"], accept_multiple_files=True)
+    if not files:
+        st.info("Please upload images to begin analysis.")
+        st.stop()
+
+    decoded = []
+    for uf in files:
+        data = np.frombuffer(uf.read(), np.uint8)
+        decoded.append((uf.name, cv2.imdecode(data, cv2.IMREAD_COLOR)))
+
+    grid = st.columns(2)
+    
+    for i, (name, img) in enumerate(decoded):
+        # 1. Generate Mask
+        mask = build_pizza_mask_pruned(img)
+        
+        # 2. Analyze Colors
+        class_idx, counts, perc, dominant = predict_universal_map(
+            img, mask, UNIVERSAL_CENTERS, CLASS_NAMES
         )
-        st.set_page_config(page_title="Pişme Analizi", layout="wide", )
-
-        st.title("Pizza Analizi")
-
-        # =========================
-        # MASKE SABİTLERİ
-        # =========================
-        HSV_V_BLACK_MAX = 40
-        HSV_V_GLARE_MIN = 225
-        HSV_S_GLARE_MAX = 30
-
-        LAB_L_MIN, LAB_L_MAX = 60, 250
-        LAB_A_MIN, LAB_A_MAX =  2,  90
-        LAB_B_MIN, LAB_B_MAX =  6, 130
-
-        DOUGH_L_MIN, DOUGH_L_MAX = 100, 250
-        DOUGH_A_MIN, DOUGH_A_MAX = -5,  10
-        DOUGH_B_MIN, DOUGH_B_MAX =  0,  60
         
-        # --- Yanık sınıfını sıkılaştırma (yalnızca siyahımsı pikseller 'burnt')
-        # --- Yanık (siyahımsı) için hibrit eşikler (LAB + HSV)
-        BURNT_L_MAX = 120        # 0..255  (düşük L = koyu)
-        BURNT_CHROMA_MAX = 80     # a/b'den kroma  (düşük kroma = renksiz/siyaha yakın)
-        BURNT_V_MAX = 105          # HSV parlaklık (V) eşiği
-        BURNT_S_MAX = 125         # HSV satürasyon (S) eşiği
+        # 3. Create Heatmap
+        heat_over = heatmap_overlay(img, class_idx, CLASS_NAMES, alpha=0.6, cmap=CMAP5, norm=NORM5)
 
-        # === Bölgesel analiz sabitleri ===
-        TARGET_REGION_CLASSES = ("brown", "dark_brown")  # yanık HARİÇ
-        REGION_BINS = (0, 0.2, 0.4, 0.6, 0.8, 1.0)      # renk skalası dilimleri (0-100%)
-
-        CONTOUR_COLOR = (0,255,0)
-        CONTOUR_THICK = 1
-
-        # Sınıf isimleri (L artan: koyudan açığa)
-        CLASS_NAMES = ["burnt", "dark_brown", "brown", "light_brown", "dough"]
-
-        # =========================
-        # ÖZEL ISI HARİTASI RENK PALETİ (çiğ→yanık)
-        # =========================
-        # 1: çiğ  → 5: yanık
-        CUSTOM_HEX = ["#FF99FF", "#FFFFB5","#FFFF66" , "#CCCC00", "#FF0000"]  # dough, light_brown, brown, dark_brown, burnt
-
-        def make_custom_cmap():
-            """Çiğ→yanık 5 renk için adımlı cmap/norm/bins döndürür."""
-            cmap = ListedColormap(CUSTOM_HEX, name="pizza5")     # 5 renk
-            bins = np.linspace(0.0, 1.0, 6)                      # 0..1 arası 5 dilim
-            norm = BoundaryNorm(bins, ncolors=cmap.N, clip=True) # adımlı eşleme
-            return cmap, norm, bins
-
-        CMAP5, NORM5, BINS5 = make_custom_cmap()
-
-        # =========================
-        # YARDIMCI
-        # =========================
-        def pct_line(perc: dict, order: list[str]) -> str:
-            """Sınıf yüzdelerini 'burnt: 12.3% | ...' formatında tek satır döndürür."""
-            return " | ".join(f"{k}: {perc[k]*100:.1f}%" for k in order)
-
-        # =========================
-        # MASKELEME
-        # =========================
-        def hsv_exclusion_mask(img):
-            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-            S, V = hsv[...,1], hsv[...,2]
-            return (V <= HSV_V_BLACK_MAX) | ((V >= HSV_V_GLARE_MIN) & (S <= HSV_S_GLARE_MAX))
-
-        def lab_inclusion_mask(img):
-            lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.int16)
-            L, A0, B0 = lab[...,0], lab[...,1]-128, lab[...,2]-128
-            brown = (L >= LAB_L_MIN) & (L <= LAB_L_MAX) & \
-                    (A0 >= LAB_A_MIN) & (A0 <= LAB_A_MAX) & \
-                    (B0 >= LAB_B_MIN) & (B0 <= LAB_B_MAX)
-            dough = (L >= DOUGH_L_MIN) & (L <= DOUGH_L_MAX) & \
-                    (A0 >= DOUGH_A_MIN) & (A0 <= DOUGH_A_MAX) & \
-                    (B0 >= DOUGH_B_MIN) & (B0 <= DOUGH_B_MAX)
-            return (brown | dough)
-
-        def keep_largest_component(mask_u8):
-            m = (mask_u8 > 0).astype(np.uint8)
-            n, lab, stats, _ = cv2.connectedComponentsWithStats(m)
-            if n <= 1: return m*255
-            k = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
-            return ((lab == k).astype(np.uint8) * 255)
-
-        def build_pizza_mask_from_ranges(img, keep_only_largest=True):
-            inc = lab_inclusion_mask(img)
-            exc = hsv_exclusion_mask(img)
-            m0  = (inc & (~exc)).astype(np.uint8) * 255
-            return keep_largest_component(m0) if keep_only_largest else m0
-
-        def outline_on(img, mask_u8, color=CONTOUR_COLOR, thick=CONTOUR_THICK):
-            out = img.copy()
-            if (mask_u8 > 0).any():
-                cnts,_ = cv2.findContours((mask_u8 > 0).astype(np.uint8),
-                                        cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                cv2.drawContours(out, cnts, -1, color, thick, lineType=cv2.LINE_AA)
-            return out
-
-        # =========================
-        # KMEANS (5 sınıf) — eğit & tahmin
-        # =========================
-        def _brown_score(centers_lab):
-            # centers_lab: shape (k,3)  [L, a0, b0]  (a0,b0: -128..127)
-            L = centers_lab[:, 0].astype(np.float32)
-            A = centers_lab[:, 1].astype(np.float32)
-            B = centers_lab[:, 2].astype(np.float32)
-            return 0.6*(255.0 - L) + 0.4*np.maximum(A, 0) + 0.15*np.maximum(B, 0)  # büyük = daha kahverengi
-
-        def _stack_masked_lab(img_bgr, mask_u8, max_pix=30000, seed=42):
-            lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.int16)
-            L, A0, B0 = lab[...,0], lab[...,1]-128, lab[...,2]-128
-            sel = (mask_u8 > 0)
-            if not np.any(sel): return np.empty((0,3), np.float32)
-            X = np.stack([L[sel], A0[sel], B0[sel]], axis=1).astype(np.float32)
-            if X.shape[0] > max_pix:
-                rs = np.random.RandomState(seed)
-                X = X[rs.choice(X.shape[0], size=max_pix, replace=False)]
-            return X
-
-        def fit_kmeans_5(images_bgr, mask_fn, seed=42):
-            if KMeans is None:
-                raise RuntimeError("scikit-learn gerekli: pip install scikit-learn")
-            pools = []
-            for img in images_bgr:
-                m = mask_fn(img)
-                X = _stack_masked_lab(img, m, max_pix=30000, seed=seed)
-                if X.size: pools.append(X)
-            if not pools:
-                raise RuntimeError("Maske içinde örnek piksel bulunamadı.")
-            X = np.vstack(pools).astype(np.float32)
-
-            # --- ÖLÇEKLEME (train)
-            mean_ = X.mean(axis=0)
-            std_  = X.std(axis=0) + 1e-6
-            Xs = (X - mean_) / std_
-
-            km = KMeans(n_clusters=5, random_state=seed, n_init=10)
-            km.fit(Xs)
-
-            # Merkezleri orijinal LAB uzayına geri çevir (rapor/görselleme için)
-            centers = km.cluster_centers_ * std_ + mean_   # (5,3) L,a0,b0
-
-            # --- KÜMELERİ BROWN SCORE’a göre sırala (büyük→küçük)
-            score = _brown_score(centers)
-            order = np.argsort(-score)                # burnt, dark_brown, brown, light_brown, dough
-            inv = np.empty_like(order); inv[order] = np.arange(order.size)
-
-            #class_order = ["burnt", "dark_brown", "brown", "light_brown", "dough"]
-            class_order = ["Burnt", "Dark Brown", "Brown", "Light Brown", "Dough"]
-
-            # UI’de görmek için sakla
-            st.session_state.km_mean = mean_
-            st.session_state.km_std  = std_
-
-            return km, order, inv, class_order, centers[order]
-
-        def predict_kmeans_map(img_bgr, mask_u8, km, inv, class_order):
-            H,W = mask_u8.shape
-            lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.int16)
-            L, A0, B0 = lab[...,0], lab[...,1]-128, lab[...,2]-128
-            hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
-            S, V = hsv[...,1].astype(np.int16), hsv[...,2].astype(np.int16)
-            m = (mask_u8 > 0)
-
-            class_idx = np.full((H,W), -1, dtype=np.int16)
-            if not np.any(m):
-                counts = {c:0 for c in class_order}; perc = {c:0.0 for c in class_order}; dom = None
-                return class_idx, counts, perc, dom
-
-            # --- KMeans tahmini (ölçekleme eğitimle aynı)
-            X = np.stack([L[m], A0[m], B0[m]], axis=1).astype(np.float32)
-            mean_ = st.session_state.get("km_mean", np.zeros(3, np.float32))
-            std_  = st.session_state.get("km_std",  np.ones(3,  np.float32))
-            Xs = (X - mean_) / std_
-            labels = km.predict(Xs)
-            ranked = inv[labels]                 # 0: burnt ... 4: dough
-            class_idx[m] = ranked
-
-            burnt_i = class_order.index("Burnt")
-            dark_i  = class_order.index("Dark Brown")
-
-            # --- HİBRİT SİYAHLIK: (LAB koyu & renksiz) VEYA (HSV düşük V & düşük S)
-            chroma = np.sqrt(A0.astype(np.float32)**2 + B0.astype(np.float32)**2)
-            blackish_lab = (L <= BURNT_L_MAX) & (chroma <= BURNT_CHROMA_MAX)
-            blackish_hsv = (V <= BURNT_V_MAX) & (S <= BURNT_S_MAX)
-            blackish = (blackish_lab | blackish_hsv) & m
-
-            # 1) siyahımsı → YANIK'a TERFİ
-            class_idx[blackish] = burnt_i
-
-            # 2) ama siyahımsı değilse ve 'burnt' etiketliyse → DARK_BROWN'a DÜŞÜR
-            wrong_burnt = (class_idx == burnt_i) & (~blackish) & m
-            dough_i = class_order.index("Dough")
-            light_i = class_order.index("Light Brown")
-        
-            # Dough seçilmiş ama içinde biraz "sarılık/kırmızılık" (A veya B) olanları terfi ettir
-            # Bu sayıları düşürürseniz "Light Brown" alanı genişler (Pembe azalır).
-            UPGRADE_A_MIN = 5   # Kırmızılık eşiği (Düşürürseniz pembe alan azalır)
-            UPGRADE_B_MIN = 10  # Sarılık eşiği    (Düşürürseniz pembe alan azalır)
-        
-            is_dough = (class_idx == dough_i)
-            # Hamur ise VE (kırmızılık > 5 VEYA sarılık > 10) ise -> Light Brown yap
-            should_be_cooked = is_dough & ((A0 > UPGRADE_A_MIN) | (B0 > UPGRADE_B_MIN))
-            class_idx[should_be_cooked] = light_i
-
-            counts = {c: int(np.count_nonzero(class_idx == i)) for i,c in enumerate(class_order)}
-            class_idx[wrong_burnt] = dark_i
-
-            # --- istatistik
-            counts = {c: int(np.count_nonzero(class_idx == i)) for i,c in enumerate(class_order)}
-            tot = sum(counts.values())
-            perc = {c: (counts[c]/tot if tot>0 else 0.0) for c in class_order}
-            dominant = max(class_order, key=lambda c: counts[c]) if tot>0 else None
-            return class_idx, counts, perc, dominant
-
-        # =========================
-        # ISI HARİTASI (özel renk paleti)
-        # =========================
-        def heatmap_overlay(img_bgr, class_idx, class_order, alpha=0.6, cmap=CMAP5, norm=NORM5):
-            """
-            class_idx: 0..4 (0=burnt, 4=dough). Skor = burnt(1) → dough(0).
-            Özel palet: dough→light_brown→brown→dark_brown→burnt (CUSTOM_HEX).
-            """
-            n = len(class_order)
-            score = np.zeros(class_idx.shape, dtype=np.float32)
-            valid = (class_idx >= 0)
-            score[valid] = 1.0 - (class_idx[valid].astype(np.float32) / (n-1))  # 1=burnt ... 0=dough
-
-            sm = cm.ScalarMappable(norm=norm, cmap=cmap)
-            colored = (sm.to_rgba(score)[...,:3] * 255).astype(np.uint8)        # RGB
-            colored_bgr = colored[..., ::-1]
-
-            out = img_bgr.copy().astype(np.float32)
-            out[valid] = (1-alpha)*out[valid] + alpha*colored_bgr[valid]
-            return np.clip(out,0,255).astype(np.uint8)
-
-        def show_heatmap_figure(img_bgr, overlay_bgr, cmap=CMAP5, norm=NORM5, bins=BINS5):
-            fig, axes = plt.subplots(1,3, figsize=(14,5), gridspec_kw={"width_ratios":[1,1,0.06]}, dpi=180)
-            axes[0].imshow(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)); axes[0].set_title(""); axes[0].axis("off")
-            axes[1].imshow(cv2.cvtColor(overlay_bgr, cv2.COLOR_BGR2RGB)); axes[1].set_title(""); axes[1].axis("off")
-
-            cbar = plt.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap), cax=axes[2])
-            tick_pos = [(bins[i]+bins[i+1])/2 for i in range(len(bins)-1)]
-            tick_lbl = ["Dough","Light Brown","Brown","Dark Brown","Burnt"]
-            cbar.set_ticks(tick_pos); cbar.set_ticklabels(tick_lbl); cbar.set_label("Browning Level")
-
-            plt.tight_layout()
-            return fig
-        def class_colors_for_pie(order: list[str]):
-            palette = {
-                "Dough":       CUSTOM_HEX[0],
-                "Ligh Brown": CUSTOM_HEX[1],
-                "Brown":       CUSTOM_HEX[2],
-                "Dark Brown":  CUSTOM_HEX[3],
-                "Burnt":       CUSTOM_HEX[4],
-            }
-            return [palette[c] for c in order]
-        def _build_region_map(mask_u8, n_sectors, n_rings):
-            """Maskeyi (halka × dilim) bölgelere böler ve her piksele bölge id'si verir."""
-            m = (mask_u8 > 0)
-            H, W = m.shape
-            M = cv2.moments(m.astype(np.uint8), binaryImage=True)
-            cx, cy = (W/2, H/2) if M["m00"] == 0 else (M["m10"]/M["m00"], M["m01"]/M["m00"])
-
-            yy, xx = np.indices((H, W))
-            dx, dy = xx - cx, yy - cy
-            r = np.sqrt(dx*dx + dy*dy)
-            theta = (np.arctan2(dy, dx) + 2*np.pi) % (2*np.pi)
-
-            r_max = np.sqrt(max(cx, W-cx)**2 + max(cy, H-cy)**2) + 1e-6
-            r_idx = np.clip((r / r_max) * n_rings, 0, n_rings - 1e-6).astype(int)
-            th_idx = (theta / (2*np.pi) * n_sectors).astype(int)
-
-            reg_map = (r_idx * n_sectors + th_idx)   # 0..(n_rings*n_sectors-1)
-            return reg_map, (int(cx), int(cy))
-
-
-        def _region_ratios(class_idx, mask_u8, class_order,
-                        target_classes, n_sectors, n_rings):
-            """Her bölge için (hedef sınıf pikselleri / tüm maske pikselleri) oranını döndürür."""
-            reg_map, _ = _build_region_map(mask_u8, n_sectors, n_rings)
-            m = (mask_u8 > 0)
-            K = n_sectors * n_rings
-            tgt_idx = [class_order.index(c) for c in target_classes if c in class_order]
-
-            ratios = np.full(K, np.nan, dtype=np.float32)
-            for k in range(K):
-                region = (reg_map == k) & m
-                tot = int(np.count_nonzero(region))
-                if tot == 0:
-                    continue
-                num = sum(int(np.count_nonzero((class_idx == ti) & region)) for ti in tgt_idx)
-                ratios[k] = num / tot
-            return ratios, reg_map
-
-
-        def _uniformity_score(ratios):
-            """0..100: 100 = tüm bölgelerde aynı oran (tam homojen)."""
-            v = ratios[~np.isnan(ratios)]
-            if v.size < 2:
-                return 0.0
-            std = float(np.std(v))
-            # [0,1] aralığında max std ≈ 0.5 kabul edilip normalize edilir
-            score = 1.0 - (std / 0.5)
-            return float(np.clip(score, 0.0, 1.0) * 100.0)
-
-
-        def region_overlay_figure_kmeans(img_bgr, class_idx, mask_u8, class_order,
-                                        n_sectors=8, n_rings=2, alpha=0.55):
-            """
-            Bölgesel analiz (dilim × halka):
-            - Her bölgenin class_idx ortalaması alınır (0: burnt ... 4: dough).
-            - Ortalama en yakın tam sayıya yuvarlanır ve tüm bölge o sınıfın rengine boyanır.
-            - Homojenlik skoru: bölge ortalamalarının (0..4) normalize edilmiş std'süne göre (0..100).
-            """
-            # --- sınıf indeksine karşılık gelen HEX rengi (index 0=burnt → CUSTOM_HEX[4], 4=dough → CUSTOM_HEX[0])
-            idx2hex = [CUSTOM_HEX[4 - i] for i in range(len(class_order))]  # ["#FF0000", "#00FF00", "#FFFF66", "#33CCFF", "#666633"]
-
-            # Bölge haritası
-            reg_map, (cx, cy) = _build_region_map(mask_u8, n_sectors, n_rings)
-            m = (mask_u8 > 0)
-
-            overlay = img_bgr.copy().astype(np.float32)
-            K = n_sectors * n_rings
-            region_means = np.full(K, np.nan, dtype=np.float32)
-
-            for k in range(K):
-                region = (reg_map == k) & m
-                if not np.any(region):
-                    continue
-                vals = class_idx[region]           # 0..4 (burnt..dough), -1 yok çünkü m ile kesiyoruz
-                mean_idx = float(np.mean(vals))
-                region_means[k] = mean_idx
-
-                idx_round = int(np.clip(np.rint(mean_idx), 0, len(class_order)-1))
-                # HEX -> BGR
-                h = idx2hex[idx_round].lstrip("#")
-                rgb = tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
-                bgr = np.array(rgb[::-1], dtype=np.float32)
-
-                overlay[region] = (1 - alpha) * overlay[region] + alpha * bgr
-
-            overlay = np.clip(overlay, 0, 255).astype(np.uint8)
-
-            # kılavuz çizgileri
-            # kılavuz çizgileri sadece maskenin içinde
-            ys, xs = np.where(m)
-            if xs.size > 0:
-                rM = int(np.sqrt(((xs - cx)**2 + (ys - cy)**2).max()))
+        col = grid[i % 2]
+        with col:
+            st.subheader(name)
             
-            # boş çizgi katmanı
-                lines = np.zeros_like(overlay, dtype=np.uint8)
-            
-            # çizgileri çiz
-                for s in range(n_sectors):
-                    th = 2*np.pi*s/n_sectors
-                    x2 = int(cx + rM*np.cos(th)); y2 = int(cy + rM*np.sin(th))
-                    cv2.line(lines, (int(cx), int(cy)), (x2, y2), (150,200,100), 15, cv2.LINE_AA)
-                for r_i in range(1, n_rings):
-                    cv2.circle(lines, (int(cx), int(cy)), int(rM*r_i/n_rings), (150,200,100), 15, cv2.LINE_AA)
-        #150,100,100
-                # maskeyi 3 kanala genişlet
-                mask3 = (mask_u8 > 0).astype(np.uint8) 
-                mask3 = np.repeat(mask3[:, :, None], 6, axis=2)
+            # Show original with green contour outline
+            base = outline_on(img, mask)
+            fig = show_heatmap_figure(base, heat_over, cmap=CMAP5, norm=NORM5, bins=BINS5)
+            st.pyplot(fig, clear_figure=True); plt.close(fig)
 
-                # sadece maskenin içindeki çizgileri bırak
-                lines = cv2.bitwise_and(lines, lines, mask=mask3[:,:,0])
-
-                # overlay ile birleştir
-                overlay = cv2.addWeighted(overlay, 1.0, lines, 1.0, 0)
-
-            # FIGÜR (kompakt: Orijinal | Bölgesel)
-
-            fig = plt.figure(figsize=(5.5, 2.9), dpi=150)  # 6x3 yerine daha kompakt
-            gs  = fig.add_gridspec(1, 2, width_ratios=[1, 1], wspace=0.06)
-
-            ax0 = fig.add_subplot(gs[0,0])
-            ax0.imshow(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
-            ax0.set_title("Orijinal", fontsize=10, pad=2); ax0.axis("off")
-
-            ax1 = fig.add_subplot(gs[0,1])
-            ax1.imshow(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB))
-            ax1.set_title("Bölgesel (ortalama sınıf rengi)", fontsize=10, pad=2); ax1.axis("off")
-
-            fig.tight_layout(pad=0.6)
-
-            # Homojenlik skoru: bölge ortalamalarını 0..1'e normalize edip (1 - std/0.5)*100
-            # (0=dough .. 4=burnt  ⇒  score = 1 - mean_idx/4)
-            with np.errstate(invalid="ignore"):
-                browning_norm = 1.0 - (region_means / max(1, (len(class_order)-1)))  # 0..1
-            uni = _uniformity_score(browning_norm)  # 0..100
-            return fig, uni
-        # =========================
-        # SIDEBAR (sadece kontur seçeneği)
-        # =========================
-        #with st.sidebar:
-            #st.subheader("Ayarlar")
-            #show_mask_outline = st.checkbox("Maskeyi konturla göster", True)
-            #st.caption("Tam çözünürlükte işlenir; eğitimde örnekleme yapılır.")
-
-        
-        with st.sidebar:
-            # --- DEFAULTS ---
-            DEFAULT_SECTORS = 8
-            DEFAULT_RINGS   = 1
-            DEFAULT_SHOW_REGION = True   # veya False, senin ihtiyacına göre
+            # Percentage Line
             st.markdown(
-            """
-            <style>
-                /* Sidebar'ın en üst boşluğunu kaldır */
-                section[data-testid="stSidebar"] > div:first-child {
-                    padding-top: 0rem;
-                    margin-top: -3rem;
-                }
-            </style>
-            """,
-            unsafe_allow_html=True
-        )
-            st.sidebar.title("Ayarlar")
-            # --- SESSION STATE INIT ---
-            if "ui_n_sectors" not in st.session_state:
-                st.session_state.ui_n_sectors = DEFAULT_SECTORS
-
-            if "ui_n_rings" not in st.session_state:
-                st.session_state.ui_n_rings = DEFAULT_RINGS
-
-            if "ui_show_region" not in st.session_state:
-                st.session_state.ui_show_region = DEFAULT_SHOW_REGION
-
-            # --- RESET BUTTON ---
-            def reset_params():
-                st.session_state.ui_n_sectors = DEFAULT_SECTORS
-                st.session_state.ui_n_rings   = DEFAULT_RINGS
-                st.session_state.ui_show_region = DEFAULT_SHOW_REGION
-
-            # --- WIDGETS ---
-            n_sectors = st.slider("Dilim", 1, 10, st.session_state.ui_n_sectors, key="ui_n_sectors")
-            n_rings   = st.slider("Halka",   1, 5, st.session_state.ui_n_rings,   key="ui_n_rings")
-            st.button( "Reset", on_click=reset_params)
-            show_region = st.checkbox("Bölge Analizi", st.session_state.ui_show_region, key="ui_show_region")
-
-
-        # =========================
-        # GİRİŞ: Upload / Klasör
-        # =========================
-        files = st.file_uploader("Görselleri yükle (tek/çoklu)", type=["jpg","jpeg","png"], accept_multiple_files=True)
-        #folder = st.text_input("Veya klasör (opsiyonel)")
-
-        paths = []
-        #if folder and os.path.isdir(folder):
-            #paths = sorted(sum([glob.glob(os.path.join(folder, p)) for p in ("*.jpg","*.jpeg","*.png")], []))
-
-        if not files and not paths:
-            st.info("Başlamak için görsel/ler yükle.")
-            st.stop()
-
-        decoded = []
-        if files:
-            for uf in files:
-                data = np.frombuffer(uf.read(), np.uint8)
-                decoded.append((uf.name, cv2.imdecode(data, cv2.IMREAD_COLOR)))
-        if paths:
-            for p in paths:
-                decoded.append((os.path.basename(p), cv2.imread(p)))
-
-        # =========================
-        # MODEL: Eğit (K=5)
-        # =========================
-        if "km_model" not in st.session_state:
-            st.session_state.km_model = None
-            st.session_state.km_inv = None
-            st.session_state.km_class_order = CLASS_NAMES[:]
-            st.session_state.km_centers = None
-
-        #st.markdown("#### 1) KMeans modeli")
-        colA, colB = st.columns([1,2])
-
-        with colA:
-            if KMeans is None:
-                st.error("`scikit-learn` gerekli: `pip install scikit-learn`")
-        # train_btn = st.button("KMeans (k=5) eğit.")
-            try:
-                imgs_only = [im for _, im in decoded]
-                km, order, inv, class_order, centers_sorted = fit_kmeans_5(imgs_only, build_pizza_mask_from_ranges, seed=42)
-                st.session_state.km_model = km
-                st.session_state.km_inv   = inv
-                st.session_state.km_class_order = class_order
-                st.session_state.km_centers = centers_sorted
-                #st.success("Model eğitildi.")
-            except Exception as e:
-                    st.error("Eğitim hatası:"); st.exception(e)
-
-        #with colB:
-            #if st.session_state.km_centers is not None:
-                #dfc = pd.DataFrame(st.session_state.km_centers, columns=["L","A0","B0"])
-                #dfc["class"] = st.session_state.km_class_order
-                #st.dataframe(dfc[["class","L","A0","B0"]], use_container_width=True)
-
-        if st.session_state.km_model is None:
-            st.warning("Önce **KMeans eğit** butonuna bas.")
-            st.stop()
-
-        # =========================
-        # 2) İŞLEME (tam çöz.) + Isı Haritası
-        # =========================
-        rows = []
-        grid = st.columns(2)
-
-
-        for i, (name, img) in enumerate(decoded):
-            mask = build_pizza_mask_from_ranges(img)
-            class_idx, counts, perc, dominant = predict_kmeans_map(
-                img, mask, st.session_state.km_model, st.session_state.km_inv, st.session_state.km_class_order
+                f"<div style='text-align:center; margin-top:-8px; margin-bottom:10px'>"
+                f"<b>Yüzdeler:</b> {pct_line(perc, CLASS_NAMES)}</div>",
+                unsafe_allow_html=True
             )
 
-            # Isı haritası (özel HEX palet ile)
-            heat_over = heatmap_overlay(img, class_idx, st.session_state.km_class_order, alpha=0.6, cmap=CMAP5, norm=NORM5)
+            # Data prep for Pie Chart
+            display_order = ["Dough", "Light Brown", "Brown", "Dark Brown", "Burnt"]
+            display_colors = ["#FF99FF", "#FFFFB5", "#FFFF66", "#CCCC00", "#FF0000"]
+            counts_list = [counts.get(k, 0) for k in display_order]
+            total = sum(counts_list) if sum(counts_list) > 0 else 1
+            perc_list = [100.0 * c / total for c in counts_list]
 
-            col = grid[i % 2]
-            with col:
-                st.subheader(name)
-                base = outline_on(img, mask) #if show_mask_outline else img
-
-                fig = show_heatmap_figure(base, heat_over, cmap=CMAP5, norm=NORM5, bins=BINS5)
-                st.pyplot(fig, clear_figure=True); plt.close(fig)
-
-                # ısı haritası altına yüzdeleri tek satır yaz
-                order = st.session_state.km_class_order
-                st.markdown(
-                    f"<div style='text-align:center; margin-top:-8px; margin-bottom:10px'>"
-                    f"<b>Yüzdeler:</b> {pct_line(perc, order)}</div>",
-                    unsafe_allow_html=True
-                )
-
-                # Yüzde barı (burnt dahil)
-                labels = st.session_state.km_class_order
-                vals = [perc[k]*100 for k in labels]
-                colors =["#FF0000","#CCCC00","#FFFF66","#FFFFAD","#FF99FF"]  # dough, light_brown, brown, dark_brown, burnt
-                # Sıralama: Dough -> Light Brown -> Brown -> Dark Brown -> Burnt
-                display_order = ["Dough", "Light Brown", "Brown", "Dark Brown", "Burnt"]
-                # Senin tanımladığın özel renk paleti
-                display_colors = ["#FF99FF", "#FFFFB5", "#FFFF66", "#CCCC00", "#FF0000"]
+            # ==================================================
+            # SMART PIE CHART (ÇAKIŞMA ÖNLEYİCİ + TAŞMA KORUMALI)
+            # ==================================================
+            # 1. Figür oluştur (DPI artırıldı, boyut ayarlandı)
+            fig_pie, ax_pie = plt.subplots(figsize=(6, 4), dpi=120)
+            
+            # Pasta dilimlerini çiz
+            wedges, _ = ax_pie.pie(perc_list, colors=display_colors, startangle=90, counterclock=False)
+            
+            # Etiket kutusu stili
+            bbox_props = dict(boxstyle="square,pad=0.2", fc="w", ec="k", lw=0.5)
+            kw = dict(arrowprops=dict(arrowstyle="-", lw=0.5), bbox=bbox_props, zorder=0, va="center")
+            
+            # 2. Etiket verilerini topla
+            labels_to_draw = []
+            for j, p in enumerate(wedges):
+                val = perc_list[j]
                 
-                # Sözlükten (counts) listeye çevir
-                counts_list = [counts.get(k, 0) for k in display_order]
-                total = sum(counts_list) if sum(counts_list) > 0 else 1
-                perc_list = [100.0 * c / total for c in counts_list]
-
-                # --- GRAFİK: DONUT CHART (EXCEL TARZI OKLU) ---
-                # figsize=(5, 3) ile kompakt tutuyoruz
-                fig, ax = plt.subplots(figsize=(5, 3), dpi=100)
+                # Eğer %0 olanları da görmek istiyorsan alttaki satırı sil veya yorum yap:
+                if val <= 0.5: continue 
                 
-                wedges, texts = ax.pie(
-                    perc_list, 
-                    colors=display_colors, 
-                    startangle=90, 
-                    counterclock=False, # Saat yönünde (Dough'dan Burnt'a)
-                    #wedgeprops=dict(width=0.4, edgecolor="white", linewidth=1) # Donut halkası
-                )
+                # Açıyı hesapla (Dilimin tam ortası)
+                ang = (p.theta2 - p.theta1)/2. + p.theta1
                 
-                # Etiket Kutusu ve Ok Ayarları
-                bbox_props = dict(boxstyle="square,pad=0.2", fc="w", ec="k", lw=0.5)
-                kw = dict(arrowprops=dict(arrowstyle="-", lw=0.5), bbox=bbox_props, zorder=0, va="center")
+                # Koordinatları bul
+                y = np.sin(np.deg2rad(ang))
+                x = np.cos(np.deg2rad(ang))
+                
+                # Etiket hangi tarafta? (1: Sağ, -1: Sol)
+                side = 1 if x >= 0 else -1
+                
+                labels_to_draw.append({
+                    "text": f"{display_order[j]}\n%{val:.1f}",
+                    "x": x,
+                    "y": y,
+                    "ang": ang,
+                    "side": side,
+                    "val": val
+                })
 
-                for i, p in enumerate(wedges):
-                    val = perc_list[i]
-                    # %1.0'dan küçük dilimleri etiketleyip kalabalık yapmayalım
-                    if val < 1.0: 
-                        continue
+            # 3. Sağ ve Sol taraftaki etiketleri ayır ve Yüksekliklerine (Y) göre sırala
+            # Bu sıralama, yukarıdan aşağıya doğru yerleştirme yapmamızı sağlar.
+            right_labels = sorted([l for l in labels_to_draw if l["side"] == 1], key=lambda k: k["y"], reverse=True)
+            left_labels  = sorted([l for l in labels_to_draw if l["side"] == -1], key=lambda k: k["y"], reverse=True)
 
-                    # Açıyı hesapla
-                    ang = (p.theta2 - p.theta1)/2. + p.theta1
-                    y = np.sin(np.deg2rad(ang))
-                    x = np.cos(np.deg2rad(ang))
+            # 4. Akıllı Yerleştirme Fonksiyonu
+            def draw_side_labels(label_group, is_left=False):
+                # Başlangıç tavan noktası (Grafiğin en tepesinden biraz yukarı)
+                last_y = 1.5 
+                min_dist = 0.30 # Etiketler arası minimum dikey mesafe (Çakışmayı önler)
+
+                for lbl in label_group:
+                    # İdeal Y pozisyonu (Dilimin kendi hizası)
+                    ideal_y = lbl["y"] * 1.15
                     
-                    # Ok yönü
-                    horizontalalignment = {-1: "right", 1: "left"}[int(np.sign(x))]
-                    kw["arrowprops"].update({"connectionstyle": f"angle,angleA=0,angleB={ang}"})
+                    # Eğer ideal pozisyon, bir önceki etikete çok yakınsa, onu aşağı it.
+                    if last_y - ideal_y < min_dist:
+                        target_y = last_y - min_dist
+                    else:
+                        target_y = ideal_y
+
+                    # Çok aşağı gitmemesi için taban sınırı koy (-1.5'in altına inmesin)
+                    target_y = max(target_y, -1.5)
                     
-                    # Etiket Metni (Sınıf Adı ve Yüzde)
-                    # Dough gibi uzun isimler için gerekirse kısaltma yapılabilir ama şimdilik tam basıyoruz
-                    ax.annotate(f"{display_order[i]}\n%{val:.1f}", 
-                                xy=(x, y), 
-                                xytext=(1.25*np.sign(x), 1.3*y), # Oku biraz dışarı aç
-                                horizontalalignment=horizontalalignment, 
-                                fontsize=8, # Yazı boyutu sabit
-                                **kw)
+                    # Bir sonraki etiket için referans noktasını güncelle
+                    last_y = target_y
+
+                    # Çizim ayarları
+                    align = "right" if is_left else "left"
+                    connection_style = f"angle,angleA=0,angleB={lbl['ang']}"
+                    kw["arrowprops"].update({"connectionstyle": connection_style})
+                    
+                    # Etiketi bas
+                    ax_pie.annotate(lbl["text"], 
+                                    xy=(lbl["x"], lbl["y"]), 
+                                    # X ekseninde biraz dışarı aç (1.4 katı), Y ekseninde hesaplanan yere koy
+                                    xytext=(1.4 * lbl["side"], target_y),
+                                    horizontalalignment=align, 
+                                    fontsize=9, **kw)
+
+            # Fonksiyonu her iki taraf için çalıştır
+            draw_side_labels(right_labels, is_left=False)
+            draw_side_labels(left_labels, is_left=True)
+
+            # Grafiği çiz (bbox_inches='tight' ile kesilmeyi önle)
+            st.pyplot(fig_pie, clear_figure=True, use_container_width=False, bbox_inches='tight', pad_inches=0.2)
+            plt.close(fig_pie)
+            # ==================================================
+
+            
+            # Text Summary
+            burnt_pct = perc["Burnt"] * 100
+            dough_pct = perc["Dough"] * 100
+            cooked_pct = (perc["Dark Brown"] + perc["Brown"] + perc["Light Brown"]) * 100
+            
+            st.markdown(
+                f"<div style='text-align:center; margin-top:-10px; margin-bottom:15px'>"
+                f" <b>Undercooked:</b> {dough_pct:.1f}%   |   "
+                f" <b>Cooked:</b> {cooked_pct:.1f}%   |   "
+                f" <b>Overcooked:</b> {burnt_pct:.1f}%"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+            st.divider()
                 
-                # use_container_width=False diyerek figsize'a sadık kalmasını sağlıyoruz
-                st.pyplot(fig, clear_figure=True, use_container_width=False)
-                plt.close(fig)
-
-                # Altına sade bir metin özeti (okuması zor olanlar için)
-                st.caption(
-                    f"Hamur: %{perc_list[0]:.1f} | "
-                    f"İdeal: %{perc_list[1]+perc_list[2]+perc_list[3]:.1f} | "
-                    f"Yanık: %{perc_list[4]:.1f}"
-                )
-                st.divider()
-
-                
-
-                
-                # --- Ek toplam yüzdeler ---
-                burnt       = perc["Burnt"] * 100
-                dough       = perc["Dough"] * 100
-                pis = (perc["Dark Brown"] + perc["Brown"] + perc["Light Brown"]) * 100
-
-                st.markdown(
-                    f"<div style='text-align:center; margin-top:-10px; margin-bottom:15px'>"
-                    f" <b>Undercooked:</b> {dough:.1f}%   |   "
-                    f" <b>Cooked:</b> {pis:.1f}%   |   "
-                    f" <b>Overcooked:</b> {burnt:.1f}%"
-                    f"</div>",
-                    unsafe_allow_html=True
-                )
-
-                row = {"file": name, "dominant": dominant}
-                row.update({f"pct_{k}": round(perc[k]*100, 2) for k in st.session_state.km_class_order})
-                rows.append(row)
-                if st.session_state.ui_show_region:
-                    fig_reg, uni = region_overlay_figure_kmeans(
-                        img, class_idx, mask, st.session_state.km_class_order,
-                        n_sectors=int(st.session_state.ui_n_sectors),
-                        n_rings=int(st.session_state.ui_n_rings),
-                        alpha=0.55
-                    )
-                    st.pyplot(fig_reg, clear_figure=True, bbox_inches = "tight"); plt.close(fig_reg)
-                    st.caption(f"Homojenlik skoru: **{uni:.1f}/100**")
- 
 def run_borek():
     st.markdown(
         """
@@ -1166,230 +936,336 @@ def run_borek():
     else:
         st.info("Başlamak için görsel/ler yükle.")
 
+import streamlit as st
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ==========================================
+# 1. SMALL CAKE ÖZEL SABİTLER
+# ==========================================
+
+# Ry Değeri Eşikleri
+SHADE_THRESHOLDS = [
+    (7.2, 17), (9.3, 16), (12.2, 15), (16.4, 14), (20.1, 13),
+    (22.9, 12), (26.5, 11), (31.7, 10), (38.5, 9), (46.9, 8),
+    (54.2, 7), (64.3, 6), (75.2, 5)
+]
+
+# Renk Kodu -> BGR
+SHADE_COLOR_MAP_BGR = {
+    4:  (73,  74,  38),   # Çok Açık
+    5:  (45,  64,  54),
+    6:  (0,  255,  255),  # Sarı
+    7:  (0,  192,  255),
+    8:  (128, 128, 255),  # Kırmızımsı
+    9:  (255,   0, 255),  # Mor
+    10: (128, 255, 255),
+    11: (0, 128, 128),
+    12: (255, 128, 128),
+    13: (255,   0, 128),
+    14: (0, 255,   0),    # Yeşil
+    15: (0, 128,   0),
+    16: (255,   0,   0),  # Mavi 
+    17: (128,   0,   0)   # Koyu
+}
+
+SHADE_COLOR_MAP_RGB = {k: (v[2]/255.0, v[1]/255.0, v[0]/255.0) for k, v in SHADE_COLOR_MAP_BGR.items()}
+
+# ==========================================
+# 2. YARDIMCI FONKSİYONLAR
+# ==========================================
+
+def apply_clahe_lab(img_bgr):
+    lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2Lab)
+    l_channel, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    l_eq = clahe.apply(l_channel)
+    lab_eq = cv2.merge((l_eq, a, b))
+    return cv2.cvtColor(lab_eq, cv2.COLOR_Lab2BGR)
+
+def get_shade_number(ry_val):
+    for limit, shade in SHADE_THRESHOLDS:
+        if ry_val < limit:
+            return shade
+    return 4
+
+def robust_cake_mask(img_bgr):
+    alpha = 1.2
+    beta = 30
+    image_for_masking = cv2.convertScaleAbs(img_bgr, alpha=alpha, beta=beta)
+    gray = cv2.cvtColor(image_for_masking, cv2.COLOR_BGR2GRAY)
+    _, white_mask = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY)
+    kernel = np.ones((3, 3), np.uint8)
+    white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, kernel)
+    cake_mask = cv2.bitwise_not(white_mask)
+    return cake_mask
+
+def get_inscribed_circle(mask_u8):
+    """
+    Bir maskenin içine sığabilecek EN BÜYÜK daireyi (Inscribed Circle) bulur.
+    Bunun için Distance Transform kullanır.
+    """
+    # Her pikselin en yakın sıfıra (siyaha) olan uzaklığını hesapla
+    dist_transform = cv2.distanceTransform(mask_u8, cv2.DIST_L2, 5)
+    
+    # En büyük uzaklık değeri = Yarıçap
+    # En büyük uzaklığın olduğu yer = Merkez
+    _, max_val, _, max_loc = cv2.minMaxLoc(dist_transform)
+    
+    radius = max_val
+    center = max_loc # (x, y)
+    
+    return center, radius
+
+def get_13_zones(mask_shape, center, r_max):
+    H, W = mask_shape[:2]
+    cx, cy = int(center[0]), int(center[1])
+    r1 = int(r_max)
+    r2 = int(0.6 * r1)
+    r3 = int(0.3 * r1)
+    
+    zones = []
+    
+    # 1. Merkez (C)
+    m = np.zeros((H, W), dtype=np.uint8)
+    cv2.circle(m, (cx, cy), r3, 255, -1)
+    zones.append(("C", m))
+
+    # 2. İç Halka (M1-M4)
+    for i in range(4):
+        m = np.zeros((H, W), dtype=np.uint8)
+        angle_start = i * 90
+        angle_end = (i + 1) * 90
+        cv2.ellipse(m, (cx, cy), (r2, r2), 0, angle_start, angle_end, 255, -1)
+        cv2.circle(m, (cx, cy), r3, 0, -1)
+        zones.append((f"M{i+1}", m))
+
+    # 3. Dış Halka (O1-O8)
+    for i in range(8):
+        m = np.zeros((H, W), dtype=np.uint8)
+        angle_start = i * 45
+        angle_end = (i + 1) * 45
+        cv2.ellipse(m, (cx, cy), (r1, r1), 0, angle_start, angle_end, 255, -1)
+        cv2.circle(m, (cx, cy), r2, 0, -1)
+        zones.append((f"O{i+1}", m))
+        
+    return zones, r1, r2, r3
+
+def create_pixel_heatmap(img_bgr, circle_mask_u8):
+    """
+    Bölge ortalaması almadan, her pikseli kendi Ry değerine göre boyar.
+    Sadece circle_mask_u8 içindeki alanı işler.
+    """
+    lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2Lab)
+    L_channel = lab[:, :, 0]
+    
+    # Ry haritası hesapla (Vektörize işlem - Hızlı)
+    # Ry = (L / 255) * 100
+    ry_map = (L_channel.astype(np.float32) / 255.0) * 100.0
+    
+    # Çıktı resmi (Boş)
+    heatmap = np.zeros_like(img_bgr)
+    
+    # Maskenin dolu olduğu yerlerdeki koordinatlar
+    y_idxs, x_idxs = np.where(circle_mask_u8 > 0)
+    
+    if len(y_idxs) == 0:
+        return heatmap
+
+    # İlgili piksellerin Ry değerleri
+    target_rys = ry_map[y_idxs, x_idxs]
+    
+    # Her piksel için tek tek renk bulmak yavaş olabilir ama en doğrusu bu.
+    # Hızlandırmak için np.digitize kullanılabilir ama senin eşikler non-linear.
+    # Basit bir map ile yapalım:
+    
+    # Piksel piksel boyama (Görselleştirme amacıyla)
+    for y, x, ry in zip(y_idxs, x_idxs, target_rys):
+        shade = get_shade_number(ry)
+        color = SHADE_COLOR_MAP_BGR.get(shade, (128,128,128))
+        heatmap[y, x] = color
+        
+    return heatmap
+
+def analyze_single_cake(img_bgr, mask_bool):
+    processed = apply_clahe_lab(img_bgr)
+    mask_u8 = mask_bool.astype(np.uint8) * 255
+    
+    # 1. GEOMETRİ: İçeri sığan en büyük daire (Inscribed Circle)
+    (cx, cy), radius = get_inscribed_circle(mask_u8)
+    
+    # Eğer radius çok küçükse (gürültü) atla
+    if radius < 5: return None, None, None, None
+    
+    # 13 Bölgeyi oluştur
+    zones, r1, r2, r3 = get_13_zones(img_bgr.shape, (cx, cy), radius)
+    
+    vis_layer_zones = np.zeros_like(img_bgr)
+    line_layer = np.zeros_like(mask_u8)
+    
+    zone_results = []
+    
+    # Temiz Daire Maskesi (Analizin sınırları artık bu mükemmel daire)
+    clean_circle_mask = np.zeros_like(mask_u8)
+    cv2.circle(clean_circle_mask, (int(cx), int(cy)), int(radius), 255, -1)
+
+    # --- A) BÖLGESEL ANALİZ (13 ZONE) ---
+    for z_name, z_mask in zones:
+        valid_zone = (z_mask > 0)
+        
+        # Çizgiler
+        z_cnts, _ = cv2.findContours(valid_zone.astype(np.uint8)*255, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(line_layer, z_cnts, -1, 255, 2)
+        
+        # Renk Hesabı
+        pixels = processed[valid_zone]
+        if len(pixels) == 0: continue
+
+        brightness = np.mean(pixels, axis=1)
+        if len(brightness) > 0:
+            p5, p95 = np.percentile(brightness, [5, 95])
+            filtered_pixels = pixels[(brightness >= p5) & (brightness <= p95)]
+            if len(filtered_pixels) == 0: filtered_pixels = pixels
+        else:
+            filtered_pixels = pixels
+        
+        avg_bgr = np.mean(filtered_pixels, axis=0)
+        lab_px = cv2.cvtColor(np.uint8([[avg_bgr]]), cv2.COLOR_BGR2Lab)[0][0]
+        L_val = lab_px[0]
+        ry = (L_val / 255.0) * 100.0
+        
+        shade = get_shade_number(ry)
+        color = SHADE_COLOR_MAP_BGR.get(shade, (128, 128, 128))
+        zone_results.append(shade)
+        
+        # Boyama (Solid)
+        vis_layer_zones[valid_zone] = color
+        
+        # Yazı
+        M = cv2.moments(z_mask)
+        if M["m00"] > 0:
+            tx, ty = int(M["m10"]/M["m00"]), int(M["m01"]/M["m00"])
+            cv2.putText(vis_layer_zones, str(shade), (tx-6, ty+4), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+
+    # Siyah çizgileri bas
+    vis_layer_zones[line_layer > 0] = (0, 0, 0)
+    
+    # --- B) PİKSEL ANALİZİ (HEATMAP) ---
+    # Sadece o temiz dairenin içindeki her pikseli analiz et
+    vis_layer_pixel = create_pixel_heatmap(processed, clean_circle_mask)
+    # Piksel analizinde de dış çerçeveyi siyah çizelim ki net dursun
+    vis_layer_pixel[line_layer > 0] = (0,0,0)
+
+    return vis_layer_zones, vis_layer_pixel, zone_results, clean_circle_mask
+
+# =========================
+# 3. ARAYÜZ VE AKIŞ
+# =========================
 
 def run_smallcake():
-
     
-
-    # ---------- Sayfa ----------
     st.set_page_config(page_title="Pişme Analizi", layout="wide")
-    st.markdown(
-        "<style>.block-container h1{margin-top:-80px}</style>",
-        unsafe_allow_html=True
-    )
+    st.markdown("<style>.block-container h1{margin-top:-80px}</style>", unsafe_allow_html=True)
     st.title("Small Cake Analizi")
+                
+    uploads = st.file_uploader("Kek Görseli Yükle", type=["jpg","jpeg","png"], accept_multiple_files=True, key="uploads_sc")
 
-    # ---------- Yardımcılar ----------
-    def hex_to_bgr(h):
-        h = h.lstrip("#")
-        return np.array([int(h[4:6],16), int(h[2:4],16), int(h[0:2],16)], dtype=np.uint8)
-
-    def simple_mask_white_bg_multi(bgr, V_thresh=232, min_area=5000):
-        """Beyaz fonda tüm keklerin kaba maskesi + kontürler."""
-        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-        V = hsv[...,2]
-        m = (V < V_thresh).astype(np.uint8) * 255
-        cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        mask = np.zeros_like(m); kept=[]
-        for c in cnts:
-            if cv2.contourArea(c) >= min_area:
-                kept.append(c)
-                cv2.drawContours(mask, [c], -1, 255, -1)
-        return mask, kept
-
-    def remove_white_and_shadow_rim(bgr, mask, band=8, V_white=212, S_shadow=33, C_shadow=10):
-        """Kenar bandındaki beyaz (V yüksek) VEYA gri gölge (S ve C_ab düşük) pikselleri maskeden çıkar."""
-        mask = (mask>0).astype(np.uint8)*255
-        if band<=0: return mask
-        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (band*2+1, band*2+1))
-        inner = cv2.erode(mask, k, 1)
-        ring  = cv2.subtract(mask, inner)
-        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-        S, V = hsv[...,1], hsv[...,2]
-        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
-        A = lab[...,1].astype(np.float32); B = lab[...,2].astype(np.float32)
-        C = np.sqrt((A-128.0)**2 + (B-128.0)**2)
-        cut = (ring>0) & ( (V>=V_white) | ((S<=S_shadow)&(C<=C_shadow)) )
-        out = mask.copy(); out[cut]=0
-        return out
-
-    # ---------- Renk skalası (verdiğin eşleme) ----------
-    COLOR_MAP = {
-        "#FFFEB5": "#818100", "#FEFF94": "#666732", "#FEFE7A": "#01FEFF", "#FFD15C": "#32CDFF",
-        "#EDB256": "#FF99FF", "#E4A741": "#FF00FF", "#C38F49": "#FFFE67", "#B89057": "#CDCC01",
-        "#996F3C": "#0167CC", "#916533": "#0101CC", "#845A37": "#01FF01", "#6C5033": "#01CC01",
-        "#68533E": "#FE0001", "#404032": "#C10100"
-    }
-    SRC_BGR = np.array([hex_to_bgr(h) for h in COLOR_MAP.keys()], dtype=np.uint8)
-    DST_BGR = np.array([hex_to_bgr(h) for h in COLOR_MAP.values()], dtype=np.uint8)
-    SRC_LAB = cv2.cvtColor(SRC_BGR[np.newaxis,:,:], cv2.COLOR_BGR2LAB)[0]
-
-    def recolor_by_lab(img_bgr, mask):
-        """LAB ΔE ile hedef skalaya boyama (arka plan beyaz)."""
-        H, W = img_bgr.shape[:2]
-        lab_img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).reshape(-1,3).astype(np.int16)
-        mask_flat = mask.reshape(-1)
-        out = np.full((H*W, 3), 255, dtype=np.uint8)
-        src16 = SRC_LAB.astype(np.int16)
-        for i in np.where(mask_flat>0)[0]:
-            pix = lab_img[i]
-            j = np.argmin(np.linalg.norm(src16 - pix, axis=1))
-            out[i] = DST_BGR[j]
-        return out.reshape(H, W, 3)
-
-    # ---------- IEC 13 bölge maskeleri ----------
-    def smallcake_region_masks(img_shape, center, r1, r2_ratio=0.6, r3_ratio=0.3):
-        H,W = img_shape[:2]
-        cx, cy = map(int, center)
-        r1 = int(r1); r2 = int(r2_ratio*r1); r3 = int(r3_ratio*r1)
-        regs=[]; blank=lambda: np.zeros((H,W),np.uint8)
-        mC=blank(); cv2.circle(mC,(cx,cy),r3,255,-1); regs.append(("C",mC))
-        for k in range(4):
-            m=blank(); cv2.ellipse(m,(cx,cy),(r2,r2),0,k*90,(k+1)*90,255,-1); cv2.circle(m,(cx,cy),r3,0,-1)
-            regs.append((f"M{k+1}",m))
-        for k in range(8):
-            m=blank(); cv2.ellipse(m,(cx,cy),(r1,r1),0,k*45,(k+1)*45,255,-1); cv2.circle(m,(cx,cy),r2,0,-1)
-            regs.append((f"O{k+1}",m))
-        return regs, r1, r2, r3
-
-    # ---------- (YENİ) Bölgeyi COLOR_MAP hedef rengine göre boyama ----------
-    def region_dominant_dst_color(heat_bgr, idx, dst_palette):
-        """Bu parçada heatmap'te en çok görünen hedef rengi (DST_BGR) ve yüzdesini döndür."""
-        if not np.any(idx):
-            return (255,255,255), 0.0
-        flat = heat_bgr[idx]
-        counts = [np.count_nonzero(np.all(flat==c, axis=1)) for c in dst_palette]
-        counts = np.asarray(counts, np.int32)
-        j = int(np.argmax(counts))
-        tot = int(np.sum(counts)) or 1
-        pct = 100.0 * counts[j] / tot
-        return tuple(int(v) for v in dst_palette[j]), pct
-
-    def paint_all_cakes_overlay(bgr, mask, heat_bgr,
-                                r2_ratio=0.6, r3_ratio=0.3,
-                                alpha=0.45,
-                                line_color=(0,0,0), line_thick=1):
-        """
-        Orijinal görüntü üzerine (sadece mask içinde) 13 parçayı,
-        COLOR_MAP hedef rengine göre boyar ve yüzdeleri yazar.
-        """
-        H, W = bgr.shape[:2]
-        base = bgr.copy()
-        overlay = base.copy()  # bütün kekler bu katmanda çizilecek
-
-        cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for c in cnts:
-            (cx, cy), r1 = cv2.minEnclosingCircle(c)
-            regions, r1, r2, r3 = smallcake_region_masks(bgr.shape, (cx,cy), r1, r2_ratio, r3_ratio)
-
-            # Her bölge: sadece kek içinde, baskın DST rengine göre boya
-            for name, m in regions:
-                idx = (m > 0) & (mask > 0)
-                color_bgr, pct = region_dominant_dst_color(heat_bgr, idx, DST_BGR)
-                overlay[idx] = color_bgr
-
-                # yüzde yazısı (kek içinde ise)
-                M = cv2.moments(m, binaryImage=True)
-                if M["m00"] > 0:
-                    x = int(M["m10"]/M["m00"]); y = int(M["m01"]/M["m00"])
-                    if mask[y, x] > 0:
-                        # okunabilirlik için ince beyaz gölge + siyah metin
-                        cv2.putText(overlay, f"{pct:.0f}%", (x-12, y+4),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.36, (255,255,255), 3, cv2.LINE_AA)
-                        cv2.putText(overlay, f"{pct:.0f}%", (x-12, y+4),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0,0,0), 1, cv2.LINE_AA)
-
-            # ince şablon çizgileri
-            cv2.circle(overlay,(int(cx),int(cy)),int(r1),line_color,line_thick)
-            cv2.circle(overlay,(int(cx),int(cy)),int(r2),line_color,line_thick)
-            cv2.circle(overlay,(int(cx),int(cy)),int(r3),line_color,line_thick)
-            for ang in range(0,360,90):
-                a = np.deg2rad(ang)
-                p0 = (int(cx+r3*np.cos(a)), int(cy+r3*np.sin(a)))
-                p1 = (int(cx+r2*np.cos(a)), int(cy+r2*np.sin(a)))
-                cv2.line(overlay, p0, p1, line_color, line_thick)
-            for ang in range(0,360,45):
-                a = np.deg2rad(ang)
-                p0 = (int(cx+r2*np.cos(a)), int(cy+r2*np.sin(a)))
-                p1 = (int(cx+r1*np.cos(a)), int(cy+r1*np.sin(a)))
-                cv2.line(overlay, p0, p1, line_color, line_thick)
-
-        # Tek seferde alpha blend ve sadece mask içinde uygula
-        blended = cv2.addWeighted(base, 1.0 - alpha, overlay, alpha, 0)
-        idx = (mask > 0)         # 2B maske
-        out = base.copy()
-        out[idx] = blended[idx]
-        return out
-
-    # ---------- Upload ---------
-
-        # 1) Maske (kalıp & gölge kenarını çıkar)
-        coarse, _ = simple_mask_white_bg_multi(bgr, V_thresh=232, min_area=5000)
-        mask = remove_white_and_shadow_rim(bgr, coarse, band=8, V_white=212, S_shadow=33, C_shadow=10)
-
-        # 2) Heatmap (COLOR_MAP hedef renklerine yeniden renklendirme)
-        heat = recolor_by_lab(bgr, mask)
-
-        # 3) Tüm kekler tek canvas: overlay + yüzdeler (renkler COLOR_MAP'ten)
-        region_vis = paint_all_cakes_overlay(bgr, mask, heat, r2_ratio=0.6, r3_ratio=0.3, alpha=0.45)
-
-        # ---- Küçük görseller ----
-        c1, c2, c3 = st.columns([1,1,1])
-        with c1:
-            st.markdown("Orijinal")
-            st.image(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), width=72)
-        with c2:
-            st.markdown("Pişme Analizi")
-            st.image(cv2.cvtColor(heat, cv2.COLOR_BGR2RGB), width=720)
-        with c3:
-            st.markdown("Bölgesel Analiz ")
-            st.image(cv2.cvtColor(region_vis, cv2.COLOR_BGR2RGB), width=720)
-
-        st.divider()
-
-
-
-
-
-    # ---------- Upload ----------
-    uploads = st.file_uploader("Görselleri yükle (tek/çoklu)", type=["jpg","jpeg","png"], accept_multiple_files=True)
     if not uploads:
-        st.info("Başlamak için görsel/ler yükle."); return
+        st.info("Lütfen analiz edilecek kek görsellerini yükleyin.")
+        return
 
     for up in uploads:
-        st.subheader(f" {up.name}")
-        bgr = cv2.imdecode(np.frombuffer(up.read(), np.uint8), cv2.IMREAD_COLOR)
-        if bgr is None: st.error("Görsel okunamadı."); continue
-
-        # 1) Maske (kalıp & gölge kenarını çıkar)
-        coarse, _ = simple_mask_white_bg_multi(bgr, V_thresh=232, min_area=5000)
-        mask = remove_white_and_shadow_rim(bgr, coarse, band=8, V_white=212, S_shadow=33, C_shadow=10)
-
-        # 2) Heatmap
-        heat = recolor_by_lab(bgr, mask)
-
-        # 3) Tek canvas üzerinde bölgesel boyama
-        region_vis = paint_all_cakes_overlay(bgr, mask, heat, r2_ratio=0.6, r3_ratio=0.3, alpha=0.45)
-
-        # ---- Küçük görseller (ekranı kaplamasın) ----
-        c1, c2, c3 = st.columns([1,1,1])
-        with c1:
-            st.markdown("Orijinal")
-            st.image(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), width=1080)
-        with c2:
-            st.markdown("Pişme Analizi")
-            st.image(cv2.cvtColor(heat, cv2.COLOR_BGR2RGB), width=1080)
-        with c3:
-            st.markdown("Bölgesel Analiz")
-            st.image(cv2.cvtColor(region_vis, cv2.COLOR_BGR2RGB), width=1080)
-        # --- Sidebar Reset Button ---
-        if st.sidebar.button("Reset"):
-            # file_uploader için verdiğin key neyse onu kullan
-            st.session_state["uploads"] = None
-
-
         st.divider()
+        st.subheader(f"Dosya: {up.name}")
+        
+        file_bytes = np.frombuffer(up.read(), np.uint8)
+        img_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        if img_bgr is None: continue
+        
+        mask_u8 = robust_cake_mask(img_bgr)
+        cnts, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Sonuç Tuvalleri (Beyaz Zemin)
+        # EN standardı gibi temiz görünmesi için beyaz zemin kullanıyoruz.
+        h, w = img_bgr.shape[:2]
+        canvas_zones = np.ones((h, w, 3), dtype=np.uint8) * 255
+        canvas_pixels = np.ones((h, w, 3), dtype=np.uint8) * 255
+        
+        all_file_shades = []
 
+        found_any = False
+        for c in cnts:
+            if cv2.contourArea(c) < 1000: continue
+            
+            single_mask = np.zeros_like(mask_u8)
+            cv2.drawContours(single_mask, [c], -1, 255, -1)
+            
+            # Analiz Fonksiyonu (Hem Zone hem Pixel döndürür)
+            v_zones, v_pixel, shades, clean_mask = analyze_single_cake(img_bgr, single_mask > 0)
+            
+            if v_zones is not None:
+                found_any = True
+                roi = clean_mask > 0
+                
+                # Zone Canvas'a işle
+                canvas_zones[roi] = v_zones[roi]
+                # Siyah çizgileri netleştir (Zone için)
+                black_px_z = np.all(v_zones == [0,0,0], axis=-1) & roi
+                canvas_zones[black_px_z] = [0,0,0]
+                
+                # Pixel Canvas'a işle
+                canvas_pixels[roi] = v_pixel[roi]
+                # Siyah çizgileri netleştir (Pixel için - opsiyonel, çerçeve görünsün diye)
+                black_px_p = np.all(v_pixel == [0,0,0], axis=-1) & roi
+                canvas_pixels[black_px_p] = [0,0,0]
+
+                all_file_shades.extend(shades)
+
+        if not found_any:
+            st.warning("Kek tespit edilemedi.")
+            continue
+
+        # --- GÖRSELLEŞTİRME (3 KOLON) ---
+        c1, c2, c3 = st.columns([1, 1, 1])
+        
+        with c1:
+            st.markdown("##### 1. Orijinal Görüntü")
+            st.markdown("*Ham Görüntü*")
+            st.image(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB), use_container_width=True)
+            if all_file_shades:
+                avg_s = sum(all_file_shades) / len(all_file_shades)
+                st.info(f"Ortalama Shade: **{avg_s:.2f}**")
+                
+        with c2:
+            st.markdown("##### 2. Bölgesel (Zone) Analiz")
+            st.markdown("*EN Standardı Stili (Solid)*")
+            st.image(cv2.cvtColor(canvas_zones, cv2.COLOR_BGR2RGB), use_container_width=True)
+            
+        with c3:
+            st.markdown("##### 3. Piksel Bazlı Analiz")
+            st.markdown("*Bölge ortalaması yok, ham doku*")
+            st.image(cv2.cvtColor(canvas_pixels, cv2.COLOR_BGR2RGB), use_container_width=True)
+
+        # Grafik Alanı
+        if all_file_shades:
+            shade_counts = {s: all_file_shades.count(s) for s in set(all_file_shades)}
+            sorted_shades = sorted(shade_counts.keys())
+            counts = [shade_counts[s] for s in sorted_shades]
+            bar_colors = [SHADE_COLOR_MAP_RGB.get(s, (0.5,0.5,0.5)) for s in sorted_shades]
+            
+            fig, ax = plt.subplots(figsize=(10, 3))
+            bars = ax.bar(range(len(counts)), counts, color=bar_colors, tick_label=[str(s) for s in sorted_shades])
+            ax.set_title("Bölgesel Renk Dağılımı")
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            
+            for bar in bars:
+                height = bar.get_height()
+                ax.annotate(f'{height}', xy=(bar.get_x() + bar.get_width() / 2, height),
+                            xytext=(0, 1), textcoords="offset points", ha='center', va='bottom')
+            st.pyplot(fig)
 
 # ==========================================
 #  ROUTER (YÖNLENDİRME)
@@ -1420,7 +1296,6 @@ else:
         run_smallcake()
 
  
-
 
 
 
