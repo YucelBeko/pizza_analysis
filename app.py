@@ -747,156 +747,156 @@ def run_borek():
     )
 
    # ============ Yardımcılar ============
-
-def hex_to_bgr(hex_code):
-    h = hex_code.lstrip("#")
-    return (int(h[4:6], 16), int(h[2:4], 16), int(h[0:2], 16))
-
-
-def hex_list_to_bgr(hex_list):
-    return np.array([hex_to_bgr(c) for c in hex_list], dtype=np.uint8)
-
-
-# =========================================================
-# 1) BÖREK REFERANS RENK SKALASI
-# Burada referanslar gerçek börek renk skalasıdır.
-# Görselleştirme renkleri ayrı tutulur.
-# =========================================================
-
-RAW_REF_HEX = [
-    "#FFFEB5",
-    "#FEFF94",
-    "#FEFE7A",
-    "#FFD15C",
-]
-
-COOKED_REF_HEX = [
-    "#EDB256",
-    "#E4A741",
-    "#C38F49",
-    "#B89057",
-    "#996F3C",
-    "#916533",
-    "#845A37",
-    "#6C5033",
-]
-
-BURNT_REF_HEX = [
-    "#68533E",
-    "#404032",
-]
-
-RAW_REF_BGR = hex_list_to_bgr(RAW_REF_HEX)
-COOKED_REF_BGR = hex_list_to_bgr(COOKED_REF_HEX)
-BURNT_REF_BGR = hex_list_to_bgr(BURNT_REF_HEX)
-
-RAW_REF_LAB = cv2.cvtColor(RAW_REF_BGR[np.newaxis, :, :], cv2.COLOR_BGR2LAB)[0].astype(np.float32)
-COOKED_REF_LAB = cv2.cvtColor(COOKED_REF_BGR[np.newaxis, :, :], cv2.COLOR_BGR2LAB)[0].astype(np.float32)
-BURNT_REF_LAB = cv2.cvtColor(BURNT_REF_BGR[np.newaxis, :, :], cv2.COLOR_BGR2LAB)[0].astype(np.float32)
-
-
-# Görselde kullanılacak 3 ana renk
-RAW_DISPLAY_BGR = np.array(hex_to_bgr("#FFFF66"), dtype=np.uint8)     # Undercooked
-COOKED_DISPLAY_BGR = np.array(hex_to_bgr("#FF9900"), dtype=np.uint8)  # Cooked
-BURNT_DISPLAY_BGR = np.array(hex_to_bgr("#C10100"), dtype=np.uint8)   # Overcooked
-
-
-# =========================================================
-# 2) DAHA SAĞLAM ÜRÜN MASKESİ
-# Eski versiyonda sadece V < 230 vardı.
-# Bu açık renkli börek yüzeyini arka plan gibi silebiliyordu.
-# Yeni mantık: sadece "çok parlak + düşük satürasyon" alanı beyaz arka plan say.
-# Sonra en büyük konturu doldur.
-# =========================================================
-
-def simple_mask_white_bg(bgr, v_thresh=245, s_thresh=35, min_area_ratio=0.02):
-    H, W = bgr.shape[:2]
-
-    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    S = hsv[..., 1]
-    V = hsv[..., 2]
-
-    white_bg = (V > v_thresh) & (S < s_thresh)
-
-    m = (~white_bg).astype(np.uint8) * 255
-
-    kernel = np.ones((5, 5), np.uint8)
-    m = cv2.morphologyEx(m, cv2.MORPH_OPEN, kernel)
-    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, kernel)
-
-    cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    min_area = H * W * min_area_ratio
-    cnts = [c for c in cnts if cv2.contourArea(c) >= min_area]
-
-    mask = np.zeros_like(m)
-
-    if cnts:
-        largest = max(cnts, key=cv2.contourArea)
-
-        # En dış konturu dolduruyoruz.
-        # Böylece açık renkli iç bölgeler maskeden düşse bile tekrar ürüne dahil olur.
-        cv2.drawContours(mask, [largest], -1, 255, -1)
-
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-
-    return mask
-
-
-# =========================================================
-# 3) GRUP BAZLI LAB SINIFLANDIRMA
-# Eski versiyon her pikseli tek bir renge atıyordu.
-# Yeni versiyon:
-#   - RAW grubuna uzaklık
-#   - COOKED grubuna uzaklık
-#   - BURNT grubuna uzaklık
-# hesaplıyor.
-# En yakın grup seçiliyor.
-# =========================================================
-
-def classify_borek_by_group(img_bgr, mask):
-    H, W = img_bgr.shape[:2]
-
-    lab_img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
-    lab_flat = lab_img.reshape(-1, 3).astype(np.float32)
-
-    mask_flat = mask.reshape(-1) > 0
-    idx = np.where(mask_flat)[0]
-
-    cls_flat = np.full((H * W,), -1, dtype=np.int8)
-    heat_flat = np.full((H * W, 3), 255, dtype=np.uint8)
-
-    if len(idx) == 0:
-        return cls_flat.reshape(H, W), heat_flat.reshape(H, W, 3)
-
-    pixels = lab_flat[idx]
-
-    # L kanalına biraz daha ağırlık veriyoruz.
-    # Açık yüzeylerin cooked'a kaçmasını azaltır.
-    lab_weights = np.array([1.35, 1.0, 1.0], dtype=np.float32)
-
-    pixels_w = pixels * lab_weights
-    raw_w = RAW_REF_LAB * lab_weights
-    cooked_w = COOKED_REF_LAB * lab_weights
-    burnt_w = BURNT_REF_LAB * lab_weights
-
-    d_raw = np.linalg.norm(pixels_w[:, None, :] - raw_w[None, :, :], axis=2).min(axis=1)
-    d_cooked = np.linalg.norm(pixels_w[:, None, :] - cooked_w[None, :, :], axis=2).min(axis=1)
-    d_burnt = np.linalg.norm(pixels_w[:, None, :] - burnt_w[None, :, :], axis=2).min(axis=1)
-
-    group_dists = np.stack([d_raw, d_cooked, d_burnt], axis=1)
-    group_cls = np.argmin(group_dists, axis=1).astype(np.int8)
-
-    cls_flat[idx] = group_cls
-
-    heat_flat[idx[group_cls == 0]] = RAW_DISPLAY_BGR
-    heat_flat[idx[group_cls == 1]] = COOKED_DISPLAY_BGR
-    heat_flat[idx[group_cls == 2]] = BURNT_DISPLAY_BGR
-
-    cls = cls_flat.reshape(H, W)
-    heat_bgr = heat_flat.reshape(H, W, 3)
-
-    return cls, heat_bgr
+    
+    def hex_to_bgr(hex_code):
+        h = hex_code.lstrip("#")
+        return (int(h[4:6], 16), int(h[2:4], 16), int(h[0:2], 16))
+    
+    
+    def hex_list_to_bgr(hex_list):
+        return np.array([hex_to_bgr(c) for c in hex_list], dtype=np.uint8)
+    
+    
+    # =========================================================
+    # 1) BÖREK REFERANS RENK SKALASI
+    # Burada referanslar gerçek börek renk skalasıdır.
+    # Görselleştirme renkleri ayrı tutulur.
+    # =========================================================
+    
+    RAW_REF_HEX = [
+        "#FFFEB5",
+        "#FEFF94",
+        "#FEFE7A",
+        "#FFD15C",
+    ]
+    
+    COOKED_REF_HEX = [
+        "#EDB256",
+        "#E4A741",
+        "#C38F49",
+        "#B89057",
+        "#996F3C",
+        "#916533",
+        "#845A37",
+        "#6C5033",
+    ]
+    
+    BURNT_REF_HEX = [
+        "#68533E",
+        "#404032",
+    ]
+    
+    RAW_REF_BGR = hex_list_to_bgr(RAW_REF_HEX)
+    COOKED_REF_BGR = hex_list_to_bgr(COOKED_REF_HEX)
+    BURNT_REF_BGR = hex_list_to_bgr(BURNT_REF_HEX)
+    
+    RAW_REF_LAB = cv2.cvtColor(RAW_REF_BGR[np.newaxis, :, :], cv2.COLOR_BGR2LAB)[0].astype(np.float32)
+    COOKED_REF_LAB = cv2.cvtColor(COOKED_REF_BGR[np.newaxis, :, :], cv2.COLOR_BGR2LAB)[0].astype(np.float32)
+    BURNT_REF_LAB = cv2.cvtColor(BURNT_REF_BGR[np.newaxis, :, :], cv2.COLOR_BGR2LAB)[0].astype(np.float32)
+    
+    
+    # Görselde kullanılacak 3 ana renk
+    RAW_DISPLAY_BGR = np.array(hex_to_bgr("#FFFF66"), dtype=np.uint8)     # Undercooked
+    COOKED_DISPLAY_BGR = np.array(hex_to_bgr("#FF9900"), dtype=np.uint8)  # Cooked
+    BURNT_DISPLAY_BGR = np.array(hex_to_bgr("#C10100"), dtype=np.uint8)   # Overcooked
+    
+    
+    # =========================================================
+    # 2) DAHA SAĞLAM ÜRÜN MASKESİ
+    # Eski versiyonda sadece V < 230 vardı.
+    # Bu açık renkli börek yüzeyini arka plan gibi silebiliyordu.
+    # Yeni mantık: sadece "çok parlak + düşük satürasyon" alanı beyaz arka plan say.
+    # Sonra en büyük konturu doldur.
+    # =========================================================
+    
+    def simple_mask_white_bg(bgr, v_thresh=245, s_thresh=35, min_area_ratio=0.02):
+        H, W = bgr.shape[:2]
+    
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        S = hsv[..., 1]
+        V = hsv[..., 2]
+    
+        white_bg = (V > v_thresh) & (S < s_thresh)
+    
+        m = (~white_bg).astype(np.uint8) * 255
+    
+        kernel = np.ones((5, 5), np.uint8)
+        m = cv2.morphologyEx(m, cv2.MORPH_OPEN, kernel)
+        m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, kernel)
+    
+        cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+        min_area = H * W * min_area_ratio
+        cnts = [c for c in cnts if cv2.contourArea(c) >= min_area]
+    
+        mask = np.zeros_like(m)
+    
+        if cnts:
+            largest = max(cnts, key=cv2.contourArea)
+    
+            # En dış konturu dolduruyoruz.
+            # Böylece açık renkli iç bölgeler maskeden düşse bile tekrar ürüne dahil olur.
+            cv2.drawContours(mask, [largest], -1, 255, -1)
+    
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    
+        return mask
+    
+    
+    # =========================================================
+    # 3) GRUP BAZLI LAB SINIFLANDIRMA
+    # Eski versiyon her pikseli tek bir renge atıyordu.
+    # Yeni versiyon:
+    #   - RAW grubuna uzaklık
+    #   - COOKED grubuna uzaklık
+    #   - BURNT grubuna uzaklık
+    # hesaplıyor.
+    # En yakın grup seçiliyor.
+    # =========================================================
+    
+    def classify_borek_by_group(img_bgr, mask):
+        H, W = img_bgr.shape[:2]
+    
+        lab_img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+        lab_flat = lab_img.reshape(-1, 3).astype(np.float32)
+    
+        mask_flat = mask.reshape(-1) > 0
+        idx = np.where(mask_flat)[0]
+    
+        cls_flat = np.full((H * W,), -1, dtype=np.int8)
+        heat_flat = np.full((H * W, 3), 255, dtype=np.uint8)
+    
+        if len(idx) == 0:
+            return cls_flat.reshape(H, W), heat_flat.reshape(H, W, 3)
+    
+        pixels = lab_flat[idx]
+    
+        # L kanalına biraz daha ağırlık veriyoruz.
+        # Açık yüzeylerin cooked'a kaçmasını azaltır.
+        lab_weights = np.array([1.35, 1.0, 1.0], dtype=np.float32)
+    
+        pixels_w = pixels * lab_weights
+        raw_w = RAW_REF_LAB * lab_weights
+        cooked_w = COOKED_REF_LAB * lab_weights
+        burnt_w = BURNT_REF_LAB * lab_weights
+    
+        d_raw = np.linalg.norm(pixels_w[:, None, :] - raw_w[None, :, :], axis=2).min(axis=1)
+        d_cooked = np.linalg.norm(pixels_w[:, None, :] - cooked_w[None, :, :], axis=2).min(axis=1)
+        d_burnt = np.linalg.norm(pixels_w[:, None, :] - burnt_w[None, :, :], axis=2).min(axis=1)
+    
+        group_dists = np.stack([d_raw, d_cooked, d_burnt], axis=1)
+        group_cls = np.argmin(group_dists, axis=1).astype(np.int8)
+    
+        cls_flat[idx] = group_cls
+    
+        heat_flat[idx[group_cls == 0]] = RAW_DISPLAY_BGR
+        heat_flat[idx[group_cls == 1]] = COOKED_DISPLAY_BGR
+        heat_flat[idx[group_cls == 2]] = BURNT_DISPLAY_BGR
+    
+        cls = cls_flat.reshape(H, W)
+        heat_bgr = heat_flat.reshape(H, W, 3)
+    
+        return cls, heat_bgr
 
     # --- UI Başlangıcı ---
     st.set_page_config(page_title="Pişme Analizi", layout="wide")
