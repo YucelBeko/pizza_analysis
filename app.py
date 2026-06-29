@@ -746,45 +746,157 @@ def run_borek():
         unsafe_allow_html=True
     )
 
-    # ============ Yardımcılar ============
-    def hex_to_bgr(hex_code):
-        h = hex_code.lstrip("#")
-        return (int(h[4:6], 16), int(h[2:4], 16), int(h[0:2], 16))
+   # ============ Yardımcılar ============
 
-    COLOR_MAP = {
-        "#FFFEB5": "#818100", "#FEFF94": "#666732", "#FEFE7A": "#01FEFF", "#FFD15C": "#32CDFF",
-        "#EDB256": "#FF99FF", "#E4A741": "#FF00FF", "#C38F49": "#FFFE67", "#B89057": "#CDCC01",
-        "#996F3C": "#0167CC", "#916533": "#0101CC", "#845A37": "#01FF01", "#6C5033": "#01CC01",
-        "#68533E": "#FE0001", "#404032": "#C10100"
-    }
-    SRC_BGR = np.array([hex_to_bgr(h) for h in COLOR_MAP.keys()], dtype=np.uint8)
-    DST_BGR = np.array([hex_to_bgr(h) for h in COLOR_MAP.values()], dtype=np.uint8)
-    SRC_LAB = cv2.cvtColor(SRC_BGR[np.newaxis,:,:], cv2.COLOR_BGR2LAB)[0]
+def hex_to_bgr(hex_code):
+    h = hex_code.lstrip("#")
+    return (int(h[4:6], 16), int(h[2:4], 16), int(h[0:2], 16))
 
-    def simple_mask_white_bg(bgr, V_thresh=230, min_area=20000):
-        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-        m = (hsv[...,2] < V_thresh).astype(np.uint8) * 255
-        cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cnts = [c for c in cnts if cv2.contourArea(c) >= min_area]
-        mask = np.zeros_like(m)
-        if cnts: cv2.drawContours(mask, [max(cnts, key=cv2.contourArea)], -1, 255, -1)
-        return mask
 
-    def recolor_by_lab(img_bgr, mask):
-        H, W = img_bgr.shape[:2]
-        lab_img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).reshape(-1,3).astype(np.int16)
-        src16 = SRC_LAB.astype(np.int16)
-        recolored = np.full((lab_img.shape[0], 3), 255, dtype=np.uint8)
-        idx = np.where(mask.reshape(-1) > 0)[0]
-        for i in idx:
-            dist = np.linalg.norm(src16 - lab_img[i], axis=1)
-            recolored[i] = DST_BGR[np.argmin(dist)]
-        return recolored.reshape(H, W, 3)
+def hex_list_to_bgr(hex_list):
+    return np.array([hex_to_bgr(c) for c in hex_list], dtype=np.uint8)
 
-    # --- Renk Tanımları ---
-    RAW_BGR    = np.array([hex_to_bgr(c) for c in ["#818100", "#666732", "#01FEFF", "#32CDFF"]], dtype=np.uint8)
-    COOKED_BGR = np.array([hex_to_bgr(c) for c in ["#FF99FF", "#FF00FF", "#FFFE67", "#CDCC01", "#01FF01", "#01CC01","#0167CC", "#0101CC"]], dtype=np.uint8)
-    BURNT_BGR  = np.array([hex_to_bgr(c) for c in ["#FE0001", "#C10100"]], dtype=np.uint8)
+
+# =========================================================
+# 1) BÖREK REFERANS RENK SKALASI
+# Burada referanslar gerçek börek renk skalasıdır.
+# Görselleştirme renkleri ayrı tutulur.
+# =========================================================
+
+RAW_REF_HEX = [
+    "#FFFEB5",
+    "#FEFF94",
+    "#FEFE7A",
+    "#FFD15C",
+]
+
+COOKED_REF_HEX = [
+    "#EDB256",
+    "#E4A741",
+    "#C38F49",
+    "#B89057",
+    "#996F3C",
+    "#916533",
+    "#845A37",
+    "#6C5033",
+]
+
+BURNT_REF_HEX = [
+    "#68533E",
+    "#404032",
+]
+
+RAW_REF_BGR = hex_list_to_bgr(RAW_REF_HEX)
+COOKED_REF_BGR = hex_list_to_bgr(COOKED_REF_HEX)
+BURNT_REF_BGR = hex_list_to_bgr(BURNT_REF_HEX)
+
+RAW_REF_LAB = cv2.cvtColor(RAW_REF_BGR[np.newaxis, :, :], cv2.COLOR_BGR2LAB)[0].astype(np.float32)
+COOKED_REF_LAB = cv2.cvtColor(COOKED_REF_BGR[np.newaxis, :, :], cv2.COLOR_BGR2LAB)[0].astype(np.float32)
+BURNT_REF_LAB = cv2.cvtColor(BURNT_REF_BGR[np.newaxis, :, :], cv2.COLOR_BGR2LAB)[0].astype(np.float32)
+
+
+# Görselde kullanılacak 3 ana renk
+RAW_DISPLAY_BGR = np.array(hex_to_bgr("#FFFF66"), dtype=np.uint8)     # Undercooked
+COOKED_DISPLAY_BGR = np.array(hex_to_bgr("#FF9900"), dtype=np.uint8)  # Cooked
+BURNT_DISPLAY_BGR = np.array(hex_to_bgr("#C10100"), dtype=np.uint8)   # Overcooked
+
+
+# =========================================================
+# 2) DAHA SAĞLAM ÜRÜN MASKESİ
+# Eski versiyonda sadece V < 230 vardı.
+# Bu açık renkli börek yüzeyini arka plan gibi silebiliyordu.
+# Yeni mantık: sadece "çok parlak + düşük satürasyon" alanı beyaz arka plan say.
+# Sonra en büyük konturu doldur.
+# =========================================================
+
+def simple_mask_white_bg(bgr, v_thresh=245, s_thresh=35, min_area_ratio=0.02):
+    H, W = bgr.shape[:2]
+
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    S = hsv[..., 1]
+    V = hsv[..., 2]
+
+    white_bg = (V > v_thresh) & (S < s_thresh)
+
+    m = (~white_bg).astype(np.uint8) * 255
+
+    kernel = np.ones((5, 5), np.uint8)
+    m = cv2.morphologyEx(m, cv2.MORPH_OPEN, kernel)
+    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, kernel)
+
+    cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    min_area = H * W * min_area_ratio
+    cnts = [c for c in cnts if cv2.contourArea(c) >= min_area]
+
+    mask = np.zeros_like(m)
+
+    if cnts:
+        largest = max(cnts, key=cv2.contourArea)
+
+        # En dış konturu dolduruyoruz.
+        # Böylece açık renkli iç bölgeler maskeden düşse bile tekrar ürüne dahil olur.
+        cv2.drawContours(mask, [largest], -1, 255, -1)
+
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+    return mask
+
+
+# =========================================================
+# 3) GRUP BAZLI LAB SINIFLANDIRMA
+# Eski versiyon her pikseli tek bir renge atıyordu.
+# Yeni versiyon:
+#   - RAW grubuna uzaklık
+#   - COOKED grubuna uzaklık
+#   - BURNT grubuna uzaklık
+# hesaplıyor.
+# En yakın grup seçiliyor.
+# =========================================================
+
+def classify_borek_by_group(img_bgr, mask):
+    H, W = img_bgr.shape[:2]
+
+    lab_img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+    lab_flat = lab_img.reshape(-1, 3).astype(np.float32)
+
+    mask_flat = mask.reshape(-1) > 0
+    idx = np.where(mask_flat)[0]
+
+    cls_flat = np.full((H * W,), -1, dtype=np.int8)
+    heat_flat = np.full((H * W, 3), 255, dtype=np.uint8)
+
+    if len(idx) == 0:
+        return cls_flat.reshape(H, W), heat_flat.reshape(H, W, 3)
+
+    pixels = lab_flat[idx]
+
+    # L kanalına biraz daha ağırlık veriyoruz.
+    # Açık yüzeylerin cooked'a kaçmasını azaltır.
+    lab_weights = np.array([1.35, 1.0, 1.0], dtype=np.float32)
+
+    pixels_w = pixels * lab_weights
+    raw_w = RAW_REF_LAB * lab_weights
+    cooked_w = COOKED_REF_LAB * lab_weights
+    burnt_w = BURNT_REF_LAB * lab_weights
+
+    d_raw = np.linalg.norm(pixels_w[:, None, :] - raw_w[None, :, :], axis=2).min(axis=1)
+    d_cooked = np.linalg.norm(pixels_w[:, None, :] - cooked_w[None, :, :], axis=2).min(axis=1)
+    d_burnt = np.linalg.norm(pixels_w[:, None, :] - burnt_w[None, :, :], axis=2).min(axis=1)
+
+    group_dists = np.stack([d_raw, d_cooked, d_burnt], axis=1)
+    group_cls = np.argmin(group_dists, axis=1).astype(np.int8)
+
+    cls_flat[idx] = group_cls
+
+    heat_flat[idx[group_cls == 0]] = RAW_DISPLAY_BGR
+    heat_flat[idx[group_cls == 1]] = COOKED_DISPLAY_BGR
+    heat_flat[idx[group_cls == 2]] = BURNT_DISPLAY_BGR
+
+    cls = cls_flat.reshape(H, W)
+    heat_bgr = heat_flat.reshape(H, W, 3)
+
+    return cls, heat_bgr
 
     # --- UI Başlangıcı ---
     st.set_page_config(page_title="Pişme Analizi", layout="wide")
@@ -796,18 +908,20 @@ def run_borek():
             file_bytes = np.frombuffer(up.read(), np.uint8)
             bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
             mask = simple_mask_white_bg(bgr)
-            heat_bgr = recolor_by_lab(bgr, mask)
+            cls, heat_bgr = classify_borek_by_group(bgr, mask)
 
             c1, c2 = st.columns(2, gap="small")
             with c1: st.subheader("Orijinal"); st.image(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), use_container_width=True)
             with c2: st.subheader("Analiz"); st.image(cv2.cvtColor(heat_bgr, cv2.COLOR_BGR2RGB), use_container_width=True)
 
             # Sayım
-            flat = heat_bgr[mask > 0]
-            def cnt(tgt):
-                tot = 0
-                for c in tgt: tot += np.count_nonzero(np.all(flat == c, axis=1))
-                return tot
+            valid = mask > 0
+
+            counts = [
+                int(np.count_nonzero((cls == 0) & valid)),  # Undercooked
+                int(np.count_nonzero((cls == 1) & valid)),  # Cooked
+                int(np.count_nonzero((cls == 2) & valid)),  # Overcooked
+            ]
             
             counts = [cnt(RAW_BGR), cnt(COOKED_BGR), cnt(BURNT_BGR)]
             total = max(sum(counts), 1)
