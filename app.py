@@ -134,7 +134,7 @@ def show_home_page():
 
 def run_potato():
     #st.title("Patates Kızartması Analizi")
-    #up_files = st.file_uploader("Görsel yükle", type=["jpg","jpeg","png"], accept_multiple_files=True)
+    #up_files = st.file_uploader("Görsel yükle", type=["jpg","jpeg","png"], accept_multiple_files=True)kıza
     #if not up_files:
         #st.info("Başlamak için görsel yükleyin."); return
     #for up in up_files:
@@ -988,9 +988,9 @@ def run_borek():
         # Alt yüzeyde kızarma beklentisi daha düşük.
         # Bu yüzden açık ve orta kızarma daha yüksek puanlanıyor.
         "alt": {
-            "Açık Kızarma": 45,
-            "Orta Kızarma": 75,
-            "Çok Kızarma": 95
+            "Light Browning": 45,
+            "Medium Browning": 75,
+            "Dark Browning": 95
         }
     }
 
