@@ -978,21 +978,10 @@ def run_borek():
 ]
 
     BROWNING_WEIGHTS_BY_SURFACE = {
-        # Üst yüzeyde iyi kızarma beklendiği için açık kızarma daha düşük puanlı.
-        "ust": {
-            "Light Browning": 20,
-            "Medium Browning": 55,
-            "Dark Browning": 90
-        },
-
-        # Alt yüzeyde kızarma beklentisi daha düşük.
-        # Bu yüzden açık ve orta kızarma daha yüksek puanlanıyor.
-        "alt": {
-            "Light Browning": 45,
-            "Medium Browning": 75,
-            "Dark Browning": 95
-        }
-    }
+    # Sıra: Açık Kızarma, Orta Kızarma, Çok Kızarma
+    "ust": [20, 55, 90],
+    "alt": [45, 75, 95]
+}
 
     BROWNING_GROUP_BGR = [
         np.array([hex_to_bgr(c) for c in group["dst_hex_list"]], dtype=np.uint8)
@@ -1242,7 +1231,6 @@ def run_borek():
 
             for i, c in enumerate(browning_counts):
                 group_name = BROWNING_GROUPS[i]["name"]
-                group_weight = surface_weights[group_name]
                 weighted_score += c * group_weight
 
             browning_score_0_to_100 = weighted_score / browning_total
