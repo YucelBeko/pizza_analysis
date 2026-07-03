@@ -1232,7 +1232,7 @@ def run_borek():
                 for i, c in enumerate(browning_counts)
             )
 
-browning_score_0_to_100 = weighted_score / browning_total
+            browning_score_0_to_100 = weighted_score / browning_total
             
             dominant_browning_index = int(np.argmax(browning_counts))
             dominant_browning_name = BROWNING_GROUPS[dominant_browning_index]["name"]
