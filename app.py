@@ -1226,14 +1226,14 @@ def run_borek():
                 surface_prefix,
                 BROWNING_WEIGHTS_BY_SURFACE["ust"]
             )
+            
+            weighted_score = sum(
+                c * surface_weights[i]
+                for i, c in enumerate(browning_counts)
+            )
 
-            weighted_score = 0
-
-            for i, c in enumerate(browning_counts):
-                group_name = BROWNING_GROUPS[i]["name"]
-                weighted_score += c * group_weight
-
-            browning_score_0_to_100 = weighted_score / browning_total
+browning_score_0_to_100 = weighted_score / browning_total
+            
             dominant_browning_index = int(np.argmax(browning_counts))
             dominant_browning_name = BROWNING_GROUPS[dominant_browning_index]["name"]
         else:
