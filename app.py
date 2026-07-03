@@ -7,6 +7,7 @@ import base64
 import hashlib
 import os
 import glob
+from dataclasses import dataclass
 
 import cv2
 import matplotlib as mpl
@@ -114,10 +115,10 @@ def show_home_page():
     )
 
     # --- KARTLAR ---
-    c1, c2, c3, c4 = st.columns(4, gap="medium")
+    c1, c2, c3, c4, c5 = st.columns(5, gap="medium")
 
     with c1:
-        centered_local_img("Patates_Logo.png") 
+        centered_local_img("Patates_Logo.png")
         st.button("Patates Analizi", use_container_width=True, on_click=change_page, args=("Patates",))
     with c2:
         centered_local_img("Pizza_Logo.png")
@@ -128,13 +129,26 @@ def show_home_page():
     with c4:
         centered_local_img("Smallcake_Logo.png")
         st.button("Kek Analizi", use_container_width=True, on_click=change_page, args=("Small Cake",))
+    with c5:
+        if os.path.exists("PyroCam_Logo.png"):
+            centered_local_img("PyroCam_Logo.png")
+        else:
+            st.markdown(
+                """
+                <div style="height:100px; display:flex; align-items:center; justify-content:center; margin-bottom:15px;">
+                    <div style="font-size:3rem; background:#f8f9fa; border:1px solid #e9ecef; border-radius:12px; padding:18px 28px; box-shadow:0 4px 6px rgba(0,0,0,0.1);">🔥</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        st.button("Pyro Cam Analizi", use_container_width=True, on_click=change_page, args=("Pyro Cam",))
 
 
 ######################################## ANALIZLER ########################################
 
 def run_potato():
     #st.title("Patates Kızartması Analizi")
-    #up_files = st.file_uploader("Görsel yükle", type=["jpg","jpeg","png"], accept_multiple_files=True)kıza
+    #up_files = st.file_uploader("Görsel yükle", type=["jpg","jpeg","png"], accept_multiple_files=True)
     #if not up_files:
         #st.info("Başlamak için görsel yükleyin."); return
     #for up in up_files:
@@ -961,27 +975,30 @@ def run_borek():
     # =========================================================
     BROWNING_GROUPS = [
     {
-        "name": "Light Browning",
+        "name": "Açık Kızarma",
         "dst_hex_list": ["#FFFE67", "#CDCC01"],
         "plot_color": "#E5D33F"
     },
     {
-        "name": "Medium Browning",
+        "name": "Orta Kızarma",
         "dst_hex_list": ["#0167CC", "#0101CC"],
         "plot_color": "#2D7BD8"
     },
     {
-        "name": "Dark Browning",
+        "name": "Çok Kızarma",
         "dst_hex_list": ["#01FF01", "#01CC01"],
         "plot_color": "#31C85A"
     }
 ]
 
     BROWNING_WEIGHTS_BY_SURFACE = {
-    # Sıra: Açık Kızarma, Orta Kızarma, Çok Kızarma
-    "ust": [20, 55, 90],
-    "alt": [45, 75, 95]
-}
+        # Sıra: Açık Kızarma, Orta Kızarma, Çok Kızarma
+        # Üst yüzeyde açık kızarma daha düşük puanlıdır.
+        "ust": [20, 55, 90],
+
+        # Alt yüzeyden daha az kızarma beklendiği için daha toleranslıdır.
+        "alt": [45, 75, 95]
+    }
 
     BROWNING_GROUP_BGR = [
         np.array([hex_to_bgr(c) for c in group["dst_hex_list"]], dtype=np.uint8)
@@ -1078,12 +1095,11 @@ def run_borek():
             [main_counts[2]]
         )
 
-        # İstersen undercooked rengini MAIN_COLORS[0] bırakabilirsin.
-        # Ama Açık Kızarma ile karışmasın diye burada biraz daha farklı verdim.
+        # Undercooked pembe: açık kızarma sarısıyla karışmasın.
         pie_colors = (
-            ["#FF99FF"] +              # Undercooked
-            BROWNING_GROUP_COLORS +    # Açık / Orta / Çok Kızarma
-            [MAIN_COLORS[2]]           # Overcooked
+            ["#FF99FF"] +
+            BROWNING_GROUP_COLORS +
+            [MAIN_COLORS[2]]
         )
 
         total = max(sum(pie_counts), 1)
@@ -1100,39 +1116,24 @@ def run_borek():
                 legend_labels.append(f"{label}  %{pct:.1f}")
 
         if len(filtered_counts) == 0:
-            ax.text(
-                0.5,
-                0.5,
-                "Veri yok",
-                ha="center",
-                va="center",
-                fontsize=11
-            )
+            ax.text(0.5, 0.5, "Veri yok", ha="center", va="center", fontsize=11)
             ax.axis("off")
             return fig
 
         def autopct_func(pct):
-            # Küçük dilimlerin içine yüzde basma, yoksa yine sıkışır.
-            if pct >= 5:
-                return f"%{pct:.1f}"
-            return ""
+            # Küçük dilimler üst üste binmesin diye yüzdeyi sadece büyük dilimlerde göster.
+            return f"%{pct:.1f}" if pct >= 5 else ""
 
         wedges, texts, autotexts = ax.pie(
             filtered_counts,
-            labels=None,  # DIŞ LABEL YOK
+            labels=None,
             colors=filtered_colors,
             startangle=90,
             counterclock=False,
             autopct=autopct_func,
             pctdistance=0.72,
-            wedgeprops=dict(
-                edgecolor="white",
-                linewidth=1.5
-            ),
-            textprops=dict(
-                fontsize=9,
-                color="black"
-            )
+            wedgeprops=dict(edgecolor="white", linewidth=1.5),
+            textprops=dict(fontsize=9, color="black")
         )
 
         for t in autotexts:
@@ -1152,10 +1153,9 @@ def run_borek():
             fontsize=8
         )
 
-        # Legend aşağıda kesilmesin diye boşluk bırakıyoruz.
         fig.subplots_adjust(bottom=0.28, top=0.88)
-
         return fig
+
     # =========================================================
     # Tek Görsel Analizi
     # =========================================================
@@ -1202,16 +1202,13 @@ def run_borek():
 
         # Kızarma grupları
         browning_counts = []
-
         for group_colors in BROWNING_GROUP_BGR:
             group_count = cnt_color_group(flat, group_colors)
             browning_counts.append(group_count)
 
-        # COOKED içinde olup browning gruplarına girmeyen renkler:
-        # #FF99FF ve #FF00FF gibi erken/açık cooked tonları.
-        # Bunları Açık Kızarma grubuna ekliyoruz.
+        # Cooked içinde olup browning gruplarına girmeyen erken/açık pişmiş tonları
+        # Açık Kızarma grubuna ekliyoruz.
         other_cooked_count = max(cooked_count - sum(browning_counts), 0)
-
         if len(browning_counts) > 0:
             browning_counts[0] += other_cooked_count
 
@@ -1226,14 +1223,13 @@ def run_borek():
                 surface_prefix,
                 BROWNING_WEIGHTS_BY_SURFACE["ust"]
             )
-            
+
             weighted_score = sum(
                 c * surface_weights[i]
                 for i, c in enumerate(browning_counts)
             )
 
             browning_score_0_to_100 = weighted_score / browning_total
-            
             dominant_browning_index = int(np.argmax(browning_counts))
             dominant_browning_name = BROWNING_GROUPS[dominant_browning_index]["name"]
         else:
@@ -1390,10 +1386,10 @@ def run_borek():
                 plt.close(fig_waffle)
 
             with row2_col2:
-                st.subheader("Kızarma Dağılımı")
+                st.subheader("Kızarma + Pişmişlik Dağılımı")
                 fig_browning = draw_browning_pie_chart(
-                main_counts,
-                browning_counts
+                    main_counts,
+                    browning_counts
                 )
                 st.pyplot(fig_browning, clear_figure=True, use_container_width=True)
                 plt.close(fig_browning)
@@ -1425,6 +1421,307 @@ def run_borek():
     render_surface_section("Alt Yüzey Analizi", "alt")
 
 
+
+
+
+# ==========================================
+# PYRO CAM ANALİZİ
+# ==========================================
+PYRO_DARK_V_MAX = 50
+PYRO_MEDIUM_V_MAX = 130
+PYRO_HAZE_S_MAX = 65
+PYRO_OVERLAY_ALPHA = 0.45
+
+
+@dataclass
+class PyroStainReport:
+    total_pixels: int
+    dark_pixels: int
+    medium_pixels: int
+    haze_pixels: int
+    clean_pixels: int
+
+    @property
+    def dark_pct(self) -> float:
+        return 100.0 * self.dark_pixels / self.total_pixels if self.total_pixels else 0.0
+
+    @property
+    def medium_pct(self) -> float:
+        return 100.0 * self.medium_pixels / self.total_pixels if self.total_pixels else 0.0
+
+    @property
+    def haze_pct(self) -> float:
+        return 100.0 * self.haze_pixels / self.total_pixels if self.total_pixels else 0.0
+
+    @property
+    def soiling_pct(self) -> float:
+        return self.dark_pct + self.medium_pct + self.haze_pct
+
+    @property
+    def clean_pct(self) -> float:
+        return 100.0 * self.clean_pixels / self.total_pixels if self.total_pixels else 0.0
+
+
+def pyro_build_polygon_mask(image: np.ndarray, points: list[tuple[int, int]]) -> np.ndarray:
+    h, w = image.shape[:2]
+    mask = np.zeros((h, w), dtype=np.uint8)
+    pts = np.array(points, dtype=np.int32).reshape((-1, 1, 2))
+    cv2.fillPoly(mask, [pts], color=255)
+    return mask
+
+
+def pyro_order_polygon_points(points: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """4 noktayı merkez etrafında sıralar; self-crossing polygon riskini azaltır."""
+    pts = np.array(points, dtype=np.float32)
+    center = pts.mean(axis=0)
+    angles = np.arctan2(pts[:, 1] - center[1], pts[:, 0] - center[0])
+    order = np.argsort(angles)
+    return [(int(pts[i, 0]), int(pts[i, 1])) for i in order]
+
+
+def pyro_analyze_stains(image: np.ndarray, mask: np.ndarray) -> tuple[PyroStainReport, np.ndarray]:
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    _, s_ch, v_ch = cv2.split(hsv)
+    roi = mask > 0
+
+    dark_mask = (v_ch < PYRO_DARK_V_MAX) & roi
+
+    medium_mask = (
+        (v_ch >= PYRO_DARK_V_MAX) &
+        (v_ch < PYRO_MEDIUM_V_MAX) &
+        roi & ~dark_mask
+    )
+
+    haze_mask = (
+        (v_ch >= PYRO_MEDIUM_V_MAX) &
+        (s_ch < PYRO_HAZE_S_MAX) &
+        roi & ~dark_mask & ~medium_mask
+    )
+
+    clean_mask = roi & ~dark_mask & ~medium_mask & ~haze_mask
+
+    report = PyroStainReport(
+        total_pixels=int(np.sum(roi)),
+        dark_pixels=int(np.sum(dark_mask)),
+        medium_pixels=int(np.sum(medium_mask)),
+        haze_pixels=int(np.sum(haze_mask)),
+        clean_pixels=int(np.sum(clean_mask)),
+    )
+
+    color_layer = image.copy()
+    color_layer[dark_mask] = (0, 0, 220)       # red: charring
+    color_layer[medium_mask] = (0, 128, 255)   # orange: medium soiling
+    color_layer[haze_mask] = (0, 210, 220)     # yellow: haze
+
+    blended = cv2.addWeighted(image, 1.0 - PYRO_OVERLAY_ALPHA, color_layer, PYRO_OVERLAY_ALPHA, 0)
+    output = image.copy()
+    output[roi] = blended[roi]
+    return report, output
+
+
+def pyro_extract_points_from_canvas(canvas_json, scale, width, height):
+    points = []
+    if canvas_json is None:
+        return points
+
+    for obj in canvas_json.get("objects", []):
+        obj_type = obj.get("type", "")
+
+        if obj_type in ["circle", "point"]:
+            left = obj.get("left", 0)
+            top = obj.get("top", 0)
+            radius = obj.get("radius", 0)
+            scale_x = obj.get("scaleX", 1)
+            scale_y = obj.get("scaleY", 1)
+            x_display = left + radius * scale_x
+            y_display = top + radius * scale_y
+        elif obj_type == "rect":
+            left = obj.get("left", 0)
+            top = obj.get("top", 0)
+            x_display = left
+            y_display = top
+        else:
+            continue
+
+        x_original = int(x_display / scale)
+        y_original = int(y_display / scale)
+        x_original = max(0, min(width - 1, x_original))
+        y_original = max(0, min(height - 1, y_original))
+        points.append((x_original, y_original))
+
+    return points
+
+
+def run_pyrocam():
+    from streamlit_drawable_canvas import st_canvas
+    from PIL import Image
+
+    st.markdown(
+        """
+        <style>
+        .block-container h1 { margin-top: -60px; }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.title("Pyro Cam Analizi")
+    st.info(
+        "Cam üzerindeki analiz bölgesini 4 nokta ile seç. "
+        "Seçilen polygon içinde charring, medium soiling, haze ve clean oranları hesaplanır."
+    )
+
+    upload = st.file_uploader(
+        "Pyro cam görseli yükle",
+        type=["jpg", "jpeg", "png"],
+        accept_multiple_files=False,
+        key="pyrocam_upload"
+    )
+
+    if upload is None:
+        st.info("Başlamak için pyro cam görseli yükle.")
+        return
+
+    file_bytes = upload.getvalue()
+    arr = np.frombuffer(file_bytes, np.uint8)
+    bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+
+    if bgr is None:
+        st.warning("Görsel okunamadı.")
+        return
+
+    H, W = bgr.shape[:2]
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    pil_img = Image.fromarray(rgb)
+
+    max_display_width = 900
+    scale = min(max_display_width / W, 1.0)
+    display_w = int(W * scale)
+    display_h = int(H * scale)
+    pil_resized = pil_img.resize((display_w, display_h))
+
+    st.subheader("1. Analiz Bölgesi Seçimi")
+    st.caption(
+        "Canvas üzerinde cam bölgesinin 4 köşesini işaretle. "
+        "Köşeleri saat yönünde veya saat yönünün tersinde seçmek en temiz sonucu verir."
+    )
+
+    canvas_col, info_col = st.columns([3, 1], gap="medium")
+
+    with canvas_col:
+        canvas_result = st_canvas(
+            fill_color="rgba(0, 255, 0, 0.20)",
+            stroke_width=4,
+            stroke_color="rgba(0, 220, 60, 1)",
+            background_image=pil_resized,
+            update_streamlit=True,
+            height=display_h,
+            width=display_w,
+            drawing_mode="point",
+            point_display_radius=7,
+            key="pyrocam_canvas"
+        )
+
+    with info_col:
+        st.markdown("### Seçim")
+        st.write("Tam 4 nokta seç.")
+        st.write("Yanlış seçimde canvas objesini seçip silebilir veya görseli yeniden yükleyebilirsin.")
+        st.write("Analiz sadece seçilen polygon içinde yapılır.")
+
+    points = pyro_extract_points_from_canvas(canvas_result.json_data, scale, W, H)
+    st.write(f"Seçilen nokta sayısı: **{len(points)} / 4**")
+
+    if len(points) != 4:
+        st.warning("Analiz için tam 4 nokta seçmelisin.")
+        return
+
+    ordered_points = pyro_order_polygon_points(points)
+    preview = bgr.copy()
+    pts = np.array(ordered_points, dtype=np.int32).reshape((-1, 1, 2))
+    cv2.polylines(preview, [pts], isClosed=True, color=(0, 255, 0), thickness=5)
+
+    st.subheader("2. Seçilen Bölge Önizleme")
+    st.image(cv2.cvtColor(preview, cv2.COLOR_BGR2RGB), use_container_width=True)
+
+    if not st.button("Pyro Cam Analizini Çalıştır", use_container_width=True):
+        return
+
+    mask = pyro_build_polygon_mask(bgr, ordered_points)
+    report, overlay = pyro_analyze_stains(bgr, mask)
+
+    st.subheader("3. Analiz Sonucu")
+
+    row1_col1, row1_col2 = st.columns(2, gap="medium")
+
+    with row1_col1:
+        st.subheader("Seçilen Bölge")
+        st.image(cv2.cvtColor(preview, cv2.COLOR_BGR2RGB), use_container_width=True)
+
+    with row1_col2:
+        st.subheader("Kir Analizi Overlay")
+        st.image(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), use_container_width=True)
+
+    row2_col1, row2_col2 = st.columns(2, gap="medium")
+
+    with row2_col1:
+        st.subheader("Kir Dağılımı")
+
+        labels = ["Charring", "Medium Soiling", "Haze", "Clean"]
+        counts = [report.dark_pixels, report.medium_pixels, report.haze_pixels, report.clean_pixels]
+        colors = ["#DC0000", "#FF8000", "#FFD200", "#D9D9D9"]
+
+        fig, ax = plt.subplots(figsize=(5.2, 4.2), dpi=100)
+        total_count = max(sum(counts), 1)
+
+        filtered_counts = []
+        filtered_colors = []
+        legend_labels = []
+
+        for label, count, color in zip(labels, counts, colors):
+            if count > 0:
+                pct = 100.0 * count / total_count
+                filtered_counts.append(count)
+                filtered_colors.append(color)
+                legend_labels.append(f"{label}  %{pct:.1f}")
+
+        def autopct_func(pct):
+            return f"%{pct:.1f}" if pct >= 5 else ""
+
+        wedges, texts, autotexts = ax.pie(
+            filtered_counts,
+            labels=None,
+            colors=filtered_colors,
+            startangle=90,
+            counterclock=False,
+            autopct=autopct_func,
+            pctdistance=0.72,
+            wedgeprops=dict(edgecolor="white", linewidth=1.5),
+            textprops=dict(fontsize=9, color="black")
+        )
+
+        for t in autotexts:
+            t.set_fontsize(9)
+            t.set_fontweight("bold")
+
+        ax.set_title("Pyro Cam Kir Dağılımı", fontsize=11, pad=8)
+        ax.axis("equal")
+        ax.legend(wedges, legend_labels, loc="upper center", bbox_to_anchor=(0.5, -0.05), ncol=2, frameon=False, fontsize=8)
+        fig.subplots_adjust(bottom=0.28, top=0.88)
+
+        st.pyplot(fig, clear_figure=True, use_container_width=True)
+        plt.close(fig)
+
+    with row2_col2:
+        st.subheader("Özet")
+        summary_df = pd.DataFrame([{
+            "Analiz Alanı (px)": report.total_pixels,
+            "Charring (%)": round(report.dark_pct, 2),
+            "Medium Soiling (%)": round(report.medium_pct, 2),
+            "Haze (%)": round(report.haze_pct, 2),
+            "Toplam Kir (%)": round(report.soiling_pct, 2),
+            "Clean (%)": round(report.clean_pct, 2)
+        }])
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
 
 # ==========================================
@@ -1779,6 +2076,8 @@ else:
         run_borek()
     elif st.session_state.current_page == "Small Cake":
         run_smallcake()
+    elif st.session_state.current_page == "Pyro Cam":
+        run_pyrocam()
 
  
 
