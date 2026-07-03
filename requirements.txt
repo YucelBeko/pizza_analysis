@@ -1,13 +1,5 @@
 streamlit==1.40.0
 streamlit-drawable-canvas==0.9.3
-numpy
-pandas
-opencv-python-headless
-matplotlib
-scikit-learn
-pybase64
-streamlit==1.40.0
-streamlit-drawable-canvas==0.9.3
 opencv-python
 numpy
 matplotlib
