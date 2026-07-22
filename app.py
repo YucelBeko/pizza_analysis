@@ -38,20 +38,31 @@ def add_global_watermark():
         <style>
         .global-watermark {
             position: fixed;
-            right: 18px;
+            left: 18px;
             bottom: 14px;
+            right: auto;
+            top: auto;
+
             z-index: 999999;
             padding: 8px 12px;
             border-radius: 10px;
+
             background: rgba(255, 255, 255, 0.72);
             color: rgba(40, 40, 40, 0.72);
+
             font-size: 12px;
             font-weight: 500;
             line-height: 1.35;
-            text-align: right;
+            text-align: left;
+
             pointer-events: none;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
             backdrop-filter: blur(4px);
+        }
+
+        .global-watermark-line {
+            display: block;
+            white-space: nowrap;
         }
 
         @media (prefers-color-scheme: dark) {
@@ -63,8 +74,8 @@ def add_global_watermark():
         </style>
 
         <div class="global-watermark">
-            Bolu PCİ - Sistem Tasarım - Pişirme Laboratuvarı<br>
-            Yücel Can Aksu<br>
+            <span class="global-watermark-line">Bolu PCİ - Sistem Tasarım - Pişirme Laboratuvarı</span>
+            <span class="global-watermark-line">Y&uuml;cel Can Aksu</span>
         </div>
         """,
         unsafe_allow_html=True
