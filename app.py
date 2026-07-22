@@ -2391,7 +2391,6 @@ def bread_make_crack_only_preview(bgr, bread_mask_u8, crack_mask_u8):
 
     return canvas
 
-
 def analyze_bread_image(file_bytes, version=BREAD_ANALYSIS_VERSION):
     arr = np.frombuffer(file_bytes, np.uint8)
     bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
