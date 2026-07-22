@@ -64,7 +64,7 @@ def add_global_watermark():
 
         <div class="global-watermark">
             Bolu PCİ - Sistem Tasarım - Pişirme Laboratuvarı<br>
-            Yücel Can Aksu
+            Yücel Can Aksu<br>
         </div>
         """,
         unsafe_allow_html=True
