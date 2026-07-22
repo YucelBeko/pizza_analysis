@@ -96,17 +96,32 @@ def change_page(page_name):
 
 # Resim Okuma Fonksiyonu (Cache'li)
 @st.cache_data(show_spinner=False)  
-def get_img_as_base64(file_path):
+def get_img_as_base64(file_path, thumb_width=300, thumb_height=200):
     try:
-        with open(file_path, "rb") as f:
-            data = f.read()
-        return base64.b64encode(data).decode()
+        from PIL import Image
+        import io
+
+        with Image.open(file_path) as img:
+            img = img.convert("RGBA")
+            img.thumbnail((thumb_width, thumb_height))
+
+            canvas = Image.new("RGBA", (thumb_width, thumb_height), (255, 255, 255, 0))
+
+            x = (thumb_width - img.width) // 2
+            y = (thumb_height - img.height) // 2
+            canvas.paste(img, (x, y), img)
+
+            buffer = io.BytesIO()
+            canvas.save(buffer, format="PNG", optimize=True)
+
+        return base64.b64encode(buffer.getvalue()).decode()
+
     except FileNotFoundError:
         return None
 
 # HTML Resim Ortala Fonksiyonu
 def centered_local_img(file_path, width=150, height=100):
-    img_b64 = get_img_as_base64(file_path)
+    img_b64 = get_img_as_base64(file_path, width * 2, height * 2)
     if img_b64:
         img_tag = f'<img src="data:image/png;base64,{img_b64}" width="{width}" height="{height}" style="border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); object-fit: cover;">'
         st.markdown(
@@ -1665,7 +1680,12 @@ def run_pyrocam():
 
     if points_key not in st.session_state:
         st.session_state[points_key] = []
-
+        
+    last_click_key = f"pyrocam_last_click_{file_hash}"
+    
+    if last_click_key not in st.session_state:
+        st.session_state[last_click_key] = None
+        
     canvas_col, info_col = st.columns([3, 1], gap="medium")
 
     with info_col:
@@ -1677,6 +1697,7 @@ def run_pyrocam():
 
         if st.button("Noktaları Sıfırla", key=f"pyrocam_reset_{file_hash}"):
             st.session_state[points_key] = []
+            st.session_state[last_click_key] = None
             st.rerun()
 
     display_bgr = cv2.resize(
@@ -1721,20 +1742,25 @@ def run_pyrocam():
     with canvas_col:
         clicked = streamlit_image_coordinates(
             display_pil,
-            key=f"pyrocam_click_{file_hash}_{len(st.session_state[points_key])}"
+            key=f"pyrocam_click_{file_hash}"
         )
 
     if clicked is not None and len(st.session_state[points_key]) < 4:
-        x_display = clicked["x"]
-        y_display = clicked["y"]
-
-        x_original = int(x_display / scale)
-        y_original = int(y_display / scale)
-
-        x_original = max(0, min(W - 1, x_original))
-        y_original = max(0, min(H - 1, y_original))
-
-        st.session_state[points_key].append((x_original, y_original))
+        x_display = int(clicked["x"])
+        y_display = int(clicked["y"])
+    
+        click_signature = (x_display, y_display)
+    
+        if st.session_state[last_click_key] != click_signature:
+            st.session_state[last_click_key] = click_signature
+    
+            x_original = int(x_display / scale)
+            y_original = int(y_display / scale)
+    
+            x_original = max(0, min(W - 1, x_original))
+            y_original = max(0, min(H - 1, y_original))
+    
+            st.session_state[points_key].append((x_original, y_original))
         st.rerun()
 
     points = st.session_state[points_key]
