@@ -184,30 +184,10 @@ def show_home_page():
         centered_local_img("Smallcake_Logo.png")
         st.button("Kek Analizi", use_container_width=True, on_click=change_page, args=("Small Cake",))
     with c5:
-        if os.path.exists("PyroCam_Logo.png"):
-            centered_local_img("PyroCam_Logo.png")
-        else:
-            st.markdown(
-                """
-                <div style="height:100px; display:flex; align-items:center; justify-content:center; margin-bottom:15px;">
-                    <div style="font-size:3rem; background:#f8f9fa; border:1px solid #e9ecef; border-radius:12px; padding:18px 28px; box-shadow:0 4px 6px rgba(0,0,0,0.1);">🔥</div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+        centered_local_img("PyroCam_Logo.png")
         st.button("Pyro Cam Analizi", use_container_width=True, on_click=change_page, args=("Pyro Cam",))
     with c6:
-        if os.path.exists("Bread_Logo.png"):
-            centered_local_img("Bread_Logo.png")
-        else:
-            st.markdown(
-                """
-                <div style="height:100px; display:flex; align-items:center; justify-content:center; margin-bottom:15px;">
-                    <div style="font-size:3rem; background:#f8f9fa; border:1px solid #e9ecef; border-radius:12px; padding:18px 28px; box-shadow:0 4px 6px rgba(0,0,0,0.1);">🍞</div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+        centered_local_img("Bread_Logo.png")
         st.button("Ekmek Yüzey Analizi", use_container_width=True, on_click=change_page, args=("Ekmek",))
 
 
