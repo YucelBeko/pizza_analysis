@@ -2092,6 +2092,7 @@ def run_smallcake():
 # ==========================================
 
 if st.session_state.current_page == "Home":
+     add_global_watermark()
     show_home_page()
 
 else:
