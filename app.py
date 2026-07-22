@@ -32,6 +32,44 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+def add_global_watermark():
+    st.markdown(
+        """
+        <style>
+        .global-watermark {
+            position: fixed;
+            right: 18px;
+            bottom: 14px;
+            z-index: 999999;
+            padding: 8px 12px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.72);
+            color: rgba(40, 40, 40, 0.72);
+            font-size: 12px;
+            font-weight: 500;
+            line-height: 1.35;
+            text-align: right;
+            pointer-events: none;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            backdrop-filter: blur(4px);
+        }
+
+        @media (prefers-color-scheme: dark) {
+            .global-watermark {
+                background: rgba(30, 30, 30, 0.62);
+                color: rgba(240, 240, 240, 0.72);
+            }
+        }
+        </style>
+
+        <div class="global-watermark">
+            Bolu PCİ - Sistem Tasarım - Pişirme Laboratuvarı<br>
+            Yücel Can Aksu
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    
 # ========================================== LIBRARY & SESSION AYARLARI ==========================================
 if "current_page" not in st.session_state:
     st.session_state.current_page = "Home"
@@ -2066,7 +2104,7 @@ else:
         
         st.divider()
         st.caption(f"Mod: {st.session_state.current_page}")
-
+    add_global_watermark()
     # Fonksiyonları Çalıştır
     if st.session_state.current_page == "Patates":
         run_potato()
