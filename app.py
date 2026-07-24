@@ -638,11 +638,11 @@ def run_pizza():
         # Bu kural özellikle alt yüzeydeki / iyi kızarmamış hamur bölgelerini korur.
         
         pale_dough_strong = (
-            (L >= 125) &
-            (V >= 120) &
-            (S <= 100) &
-            (A0 >= -10) & (A0 <= 26) &
-            (B0 >= -5) & (B0 <= 44) &
+            (L >= 130) &
+            (V >= 125) &
+            (S <= 85) &
+            (A0 >= -10) & (A0 <= 22) &
+            (B0 >= -5) & (B0 <= 36) &
             m
         )
         
