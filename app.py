@@ -625,8 +625,48 @@ def run_pizza():
 
         # Rule D: Dough Tolerance
         # If labeled Dough but has some color (A>5 or B>25), it's likely Light Brown.
-        fake_dough = (class_idx == dough_i) & ((A0 > 5) | (B0 > 25)) & m
+        fake_dough = (
+            (class_idx == dough_i) &
+            (S > 95) &
+            ((A0 > 10) | (B0 > 42)) &
+            m
+        )
         class_idx[fake_dough] = light_i
+
+        # Rule E: Pale Dough Override
+        # Açık, düşük doygunluklu, gri-bej hamur alanları Brown'a kaçmasın.
+        # Bu kural özellikle alt yüzeydeki / iyi kızarmamış hamur bölgelerini korur.
+        
+        pale_dough_strong = (
+            (L >= 125) &
+            (V >= 120) &
+            (S <= 100) &
+            (A0 >= -10) & (A0 <= 26) &
+            (B0 >= -5) & (B0 <= 44) &
+            m
+        )
+        
+        pale_dough_soft = (
+            (L >= 115) &
+            (V >= 115) &
+            (S <= 105) &
+            (A0 >= -12) & (A0 <= 28) &
+            (B0 >= -5) & (B0 <= 46) &
+            m
+        )
+        
+        # Strong alan direkt Dough.
+        class_idx[pale_dough_strong] = dough_i
+        
+        # Soft alan Brown/Dark/Burnt'a kaçtıysa en azından Light Brown'a çek.
+        class_idx[
+            pale_dough_soft &
+            (
+                (class_idx == burnt_i) |
+                (class_idx == dark_i) |
+                (class_idx == brown_i)
+            )
+        ] = light_i
 
         # --- Statistics ---
         counts = {c: int(np.count_nonzero(class_idx == i)) for i,c in enumerate(class_order)}
