@@ -633,27 +633,12 @@ def run_pizza():
         )
         class_idx[fake_dough] = light_i
 
-        # Pizza sınırına olan uzaklık.
-        # Kenara yakın açık/pale kabuk alanlarını Dough yapmamak için kullanıyoruz.
-        pizza_mask_u8 = (m.astype(np.uint8) * 255)
-        
-        dist_to_edge = cv2.distanceTransform(
-            pizza_mask_u8,
-            cv2.DIST_L2,
-            5
-        )
-        
-        # Dinamik eşik: görsel/pizza boyutuna göre çalışsın.
-        min_dough_dist = max(18, int(0.035 * min(H, W)))
-        
-        dough_allowed_area = dist_to_edge >= min_dough_dist
         
         # Rule E: Pale Dough Override
         # Açık, düşük doygunluklu, gri-bej hamur alanları Brown'a kaçmasın.
         # Bu kural özellikle alt yüzeydeki / iyi kızarmamış hamur bölgelerini korur.
         
         pale_dough_strong = (
-            dough_allowed_area &
             (L >= 130) &
             (V >= 125) &
             (S <= 85) &
@@ -663,7 +648,6 @@ def run_pizza():
         )
         
         pale_dough_soft = (
-            dough_allowed_area &
             (L >= 115) &
             (V >= 115) &
             (S <= 105) &
@@ -672,20 +656,8 @@ def run_pizza():
             m
         )
         
-        pale_edge_cooked = (
-            (~dough_allowed_area) &
-            (L >= 115) &
-            (V >= 110) &
-            (S <= 115) &
-            (A0 >= -12) & (A0 <= 30) &
-            (B0 >= -5) & (B0 <= 50) &
-            m
-        )
-        
-        class_idx[
-            pale_edge_cooked &
-            (class_idx == dough_i)
-        ] = light_i
+        # Strong alan direkt Dough.
+        class_idx[pale_dough_strong] = dough_i
         
         # Soft alan Brown/Dark/Burnt'a kaçtıysa en azından Light Brown'a çek.
         class_idx[
