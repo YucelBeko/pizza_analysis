@@ -586,7 +586,7 @@ def run_pizza():
 
         # Rule A: Charcoal/Ash Detection
         # L < 85: Pixels this dark are burnt regardless of color.
-        is_charcoal = (L < 85) & m  
+        is_charcoal = (L < 85) & m 
         
         # Matte Black Detection: Dark pixels (up to L=115) with very low color (A&B < 20).
         is_ash = (L >= 85) & (L < 115) & (A0 < 20) & (B0 < 20) & m
@@ -594,8 +594,23 @@ def run_pizza():
         # Shiny Burnt Detection: High Value (V) but low Saturation (S).
         is_shiny_burnt = (V < 190) & (S < 40) & (L < 180) & m
 
-        # Apply Burnt overrides
-        true_burnt_mask = (is_charcoal | is_ash | is_shiny_burnt)
+        # Açık/gri-bej hamur koruması
+        # Sadece ash/shiny_burnt gibi kararsız alanlardan hamuru korur.
+        # Çok koyu gerçek yanığı korumaz.
+        dough_protection = (
+            (L >= 105) &
+            (V >= 120) &
+            (S <= 75) &
+            (A0 >= -8) & (A0 <= 22) &
+            (B0 >= -5) & (B0 <= 38) &
+            m
+        )
+        
+        true_burnt_mask = (
+            is_charcoal |
+            ((is_ash | is_shiny_burnt) & (~dough_protection))
+        )
+
         class_idx[true_burnt_mask] = burnt_i
 
         # Rule B: Shadow/Crack Protection
